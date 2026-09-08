@@ -1,0 +1,99 @@
+{
+  "schema_version": 1,
+  "name": "switchyard-sequencer",
+  "project_shape": "backend",
+  "modules": [
+    {
+      "id": "entry",
+      "path": "src/switchyard/entry",
+      "responsibility": "HTTP server, routing, payload parsing, and JSON envelopes"
+    },
+    {
+      "id": "service",
+      "path": "src/switchyard/service",
+      "responsibility": "workflow commands and application persistence boundary"
+    },
+    {
+      "id": "domain",
+      "path": "src/switchyard/domain",
+      "responsibility": "entities, validation, transitions, allocation, and pull sequencing"
+    },
+    {
+      "id": "storage",
+      "path": "src/switchyard/storage",
+      "responsibility": "workspace state, atomic JSON persistence, seed data, and event journal"
+    },
+    {
+      "id": "report",
+      "path": "src/switchyard/report",
+      "responsibility": "yard metrics, closure blockers, and deterministic summaries"
+    }
+  ],
+  "complexity": {
+    "mechanisms": [
+      "state_transition",
+      "validation_boundary",
+      "error_propagation",
+      "resource_lifecycle",
+      "lifo_constraint"
+    ]
+  },
+  "workflows": [
+    {
+      "id": "open-shift-classify-intake",
+      "name": "Open a shift and classify an intake train",
+      "entry": "POST /api/shifts and POST /api/intake-trains/{code}/classify",
+      "steps": [
+        "validate shift and car manifest payloads",
+        "allocate cars to compatible standing tracks",
+        "persist classified cars and an intake event"
+      ],
+      "success": "the intake train is classified and every compatible car is standing on a track",
+      "failure": "invalid codes, duplicate cars, or full incompatible tracks produce a stable error",
+      "verification": "workflow check creates a shift and classifies a four-car intake through the HTTP API",
+      "module_ids": ["entry", "service", "domain", "storage"]
+    },
+    {
+      "id": "plan-outbound-pull",
+      "name": "Plan an outbound pull sequence",
+      "entry": "POST /api/outbound-trains and POST /api/outbound-trains/{code}/sequencer",
+      "steps": [
+        "select standing cars for a destination",
+        "simulate LIFO and buffer constraints",
+        "derive actions, reserve cars, and persist a queued pull run"
+      ],
+      "success": "the sequencer returns a pull run and marks the outbound train planned",
+      "failure": "unavailable cars, wrong destination, or impossible stack access produce a planning error",
+      "verification": "workflow check plans an outbound consist and verifies the generated pull actions",
+      "module_ids": ["entry", "service", "domain", "storage"]
+    },
+    {
+      "id": "execute-pull-depart",
+      "name": "Execute pull actions and depart the outbound train",
+      "entry": "POST /api/pull-runs/{code}/advance and POST /api/outbound-trains/{code}/depart",
+      "steps": [
+        "advance the pull run through buffer and return actions",
+        "append planned cars to the assembled consist",
+        "complete the run and mark the outbound train departed"
+      ],
+      "success": "the assembled consist matches the planned consist and the train departs",
+      "failure": "a mismatched stack top or unreserved car fails the current action",
+      "verification": "workflow check executes every pull action and verifies train departure",
+      "module_ids": ["entry", "service", "domain", "storage"]
+    },
+    {
+      "id": "close-shift-balance",
+      "name": "Close a shift with a yard balance",
+      "entry": "POST /api/shifts/{code}/close and GET /api/yard",
+      "steps": [
+        "derive yard totals and occupancy metrics",
+        "collect closure blockers from open intakes and active runs",
+        "persist a closure snapshot and expose the yard view"
+      ],
+      "success": "a clean yard state produces a snapshot and the shift becomes closed",
+      "failure": "open work or an occupied maintenance track prevents closure",
+      "verification": "workflow check closes a shift and verifies the returned yard balance",
+      "module_ids": ["entry", "service", "domain", "storage", "report"]
+    }
+  ]
+}
