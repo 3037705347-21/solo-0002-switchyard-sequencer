@@ -36,6 +36,11 @@ state as JSON files under a configurable data directory.
   from a validated outbound plan.
 - `ClosureSnapshot`: an immutable metric set and blocker list produced when a
   shift closes.
+- `DispatchTicket`: a queue-ordered registration at the pull dispatch board.
+  It declares the source standing tracks, transfer bays (X1), blocker cars,
+  and target cars a queued pull plan occupies, tracks a QUEUED -> CLAIMED ->
+  RUNNING -> COMPLETED (or CANCELLED) lifecycle, and persists the execution
+  token handed to the claiming client.
 
 ## Workflows
 
@@ -73,6 +78,33 @@ appended to the outbound assembled consist, and the run completes only when the
 assembled sequence matches the planned sequence. The dispatcher can then mark
 the train departed and move its cars into the departed state.
 
+### 3a. Register plans at the pull dispatch board
+
+Entry: `POST /api/outbound-trains/{code}/dispatch`, `GET /api/dispatch`,
+`GET /api/dispatch/{ticket}`, `POST /api/dispatch/{ticket}/claim`,
+`POST /api/dispatch/{ticket}/cancel`
+
+Multiple planned pulls can queue together even though the yard has limited
+standing tracks and one transfer bay X1. Each plan is registered as a
+`DispatchTicket` in queue order. The ticket declares the source standing
+tracks, the transfer bay (only when blocker cars must be buffered), the
+individual blocker cars, and the reserved target cars. A ticket is eligible to
+run only when no earlier active ticket holds an overlapping declared resource;
+otherwise the board view reports each blocking ticket, the shared resources,
+and the reason (`ahead-in-queue` versus `resource-held`), along with the
+release actions (the RETURN/PULL step that hands each resource back).
+
+A client claims an eligible ticket and receives an opaque claim token. The
+same ticket cannot be claimed by two clients: another client is rejected with
+`RESOURCE_BUSY`, a repeated claim carrying the original client id and token is
+idempotent, and advancing the pull run requires the matching token. The queue,
+resource declarations, and issued tokens are persisted, so a service restart
+keeps the queue order and every execution right. Unstarted tickets (queued or
+claimed but with no car moved) can be cancelled; cancellation marks the run
+cancelled, returns the outbound to DRAFT, releases the target-car reservations
+and declared resources, and unblocks later tickets. A RUNNING ticket cannot be
+cancelled.
+
 ### 4. Close a shift with a yard balance
 
 Entry: `POST /api/shifts/{code}/close`, `GET /api/yard`
@@ -92,7 +124,14 @@ view for verification.
   is allowed only before classification.
 - Outbound state moves from `draft` to `planned` when a pull run is created,
   then to `ready` when assembly completes, then to `departed`.
-- Pull runs move from `queued` to `running`, then `completed` or `failed`.
+- Pull runs move from `queued` to `running`, then `completed`, `failed`, or
+  `cancelled`.
+- Dispatch tickets move from `queued` to `claimed`, then `running` and
+  `completed`, or to `cancelled` before any car moves; their claim tokens are
+  persisted and required for every advance.
+- Dispatch board arbitration is queue ordered: an earlier active ticket that
+  declares an overlapping source track, transfer bay, or blocker car blocks a
+  later ticket from claiming, even when each plan is valid on its own.
 - Car state moves from `received` to `standing`, `reserved`, `assembled`, and
   `departed`.
 - Destination-sorting tracks accept only cars whose destination matches the
@@ -129,7 +168,16 @@ workspace snapshot and never mutate it.
 - `POST /api/intake-trains/{code}/classify`: place cars on standing tracks.
 - `POST /api/outbound-trains`: create an outbound train.
 - `POST /api/outbound-trains/{code}/sequencer`: create a pull run.
-- `POST /api/pull-runs/{code}/advance`: execute the next pull actions.
+- `POST /api/outbound-trains/{code}/dispatch`: register a draft at the dispatch
+  board and derive its declared resources.
+- `GET /api/dispatch`: return the queue order, tickets, blockers, release
+  actions, and the per-resource holder view.
+- `GET /api/dispatch/{ticket}`: return one ticket with eligibility and blockers.
+- `POST /api/dispatch/{ticket}/claim`: acquire the exclusive execution token.
+- `POST /api/dispatch/{ticket}/cancel`: cancel an unstarted ticket and release
+  its dependencies.
+- `POST /api/pull-runs/{code}/advance`: execute the next pull actions (a
+  dispatch claim token is required for board-registered runs).
 - `POST /api/outbound-trains/{code}/depart`: mark an assembled train departed.
 - `POST /api/shifts/{code}/close`: create a closure snapshot.
 - `GET /api/yard`: return the full yard view.
@@ -146,7 +194,9 @@ engineering task stage adds red/green unit tests for validation, transition
 tables, allocation, pull sequencing, and atomic persistence. This baseline
 still exposes production workflow checks under `checks/`; each check starts the
 HTTP service, drives the public API with real requests, and verifies the
-visible success state.
+visible success state. `checks/wf_pull_dispatch.py` additionally restarts the
+service against the same data directory to prove queue order, blocker state,
+and claim tokens are recovered.
 
 ## Intentionally omitted
 

@@ -190,12 +190,55 @@ def parse_transfer_code(raw: Any) -> str:
     return transfer
 
 
+def parse_client_id(raw: Any, field_name: str = "client_id", required: bool = True) -> str | None:
+    body = require_object(raw, "payload")
+    value = body.get(field_name)
+    if value is None and not required:
+        return None
+    client = require_text(value, field_name, 60)
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:@-]{0,59}", client):
+        raise ValidationError(
+            f"invalid {field_name}",
+            **{field_name: ["letters, digits and . _ : @ - only"]},
+        )
+    return client
+
+
+def parse_claim_token(raw: Any, *, required: bool = True) -> str | None:
+    body = require_object(raw, "payload")
+    value = body.get("claim_token")
+    if value is None:
+        if required:
+            raise ValidationError("claim_token is required", **{"claim_token": ["is required"]})
+        return None
+    token = require_text(value, "claim_token", 120)
+    if not re.fullmatch(r"[A-Za-z0-9._-]{16,120}", token):
+        raise ValidationError("invalid claim_token", **{"claim_token": ["malformed token"]})
+    return token
+
+
+def build_dispatch_register(raw: Any) -> tuple[str, str]:
+    transfer_code = parse_transfer_code(raw)
+    client_id = parse_client_id(raw, field_name="client_id", required=True)
+    return transfer_code, str(client_id)
+
+
+def build_dispatch_claim(raw: Any) -> tuple[str | None, str | None]:
+    client_id = parse_client_id(raw, field_name="client_id", required=True)
+    token = parse_claim_token(raw, required=False)
+    return client_id, token
+
+
 __all__ = [
+    "build_dispatch_claim",
+    "build_dispatch_register",
     "build_intake_payload",
     "build_outbound_payload",
     "build_shift_payload",
     "parse_advance_steps",
     "parse_car_input",
+    "parse_claim_token",
+    "parse_client_id",
     "parse_transfer_code",
     "require_integer",
     "require_object",

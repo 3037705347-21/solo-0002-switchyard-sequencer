@@ -10,7 +10,7 @@ from ..domain.pull import YardEvent
 from ..domain.timeutil import now_iso
 from ..domain.track import BufferBay, StandingTrack
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 
 @dataclass(slots=True)
@@ -25,6 +25,8 @@ class YardWorkspace:
     outbounds: dict[str, Any] = field(default_factory=dict)
     runs: dict[str, Any] = field(default_factory=dict)
     shifts: dict[str, Any] = field(default_factory=dict)
+    dispatch_tickets: dict[str, Any] = field(default_factory=dict)
+    next_dispatch_order: int = 1
     events: list[YardEvent] = field(default_factory=list)
     closure_snapshots: list[dict[str, Any]] = field(default_factory=list)
 
@@ -56,6 +58,15 @@ class YardWorkspace:
 
     def bay(self, code: str) -> BufferBay:
         return self.buffer_bays[code]
+
+    def active_tickets(self) -> list[Any]:
+        return [ticket for ticket in self.dispatch_tickets.values() if ticket.is_active()]
+
+    def ticket_for_run(self, run_code: str) -> Any | None:
+        for ticket in self.dispatch_tickets.values():
+            if ticket.run_code == run_code and ticket.is_active():
+                return ticket
+        return None
 
 
 __all__ = ["SCHEMA_VERSION", "YardWorkspace"]

@@ -72,6 +72,15 @@ class RunState(EnumValue):
     RUNNING = "RUNNING"
     COMPLETED = "COMPLETED"
     FAILED = "FAILED"
+    CANCELLED = "CANCELLED"
+
+
+class TicketState(EnumValue):
+    QUEUED = "QUEUED"
+    CLAIMED = "CLAIMED"
+    RUNNING = "RUNNING"
+    COMPLETED = "COMPLETED"
+    CANCELLED = "CANCELLED"
 
 
 class ShiftState(EnumValue):
@@ -98,6 +107,10 @@ class EventKind(EnumValue):
     SHIFT_CLOSED = "SHIFT_CLOSED"
     CLOSURE_BLOCKED = "CLOSURE_BLOCKED"
     YARD_VIEWED = "YARD_VIEWED"
+    DISPATCH_REGISTERED = "DISPATCH_REGISTERED"
+    DISPATCH_CLAIMED = "DISPATCH_CLAIMED"
+    DISPATCH_CANCELLED = "DISPATCH_CANCELLED"
+    DISPATCH_COMPLETED = "DISPATCH_COMPLETED"
 
 
 __all__ = [
@@ -110,6 +123,7 @@ __all__ = [
     "OutboundState",
     "RunState",
     "ShiftState",
+    "TicketState",
     "TrackPurpose",
     "TrackState",
 ]

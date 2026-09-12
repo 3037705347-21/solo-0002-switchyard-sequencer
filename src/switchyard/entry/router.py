@@ -5,9 +5,10 @@ from __future__ import annotations
 import re
 from typing import Any, Callable
 
-from ..domain.errors import DomainError, NotFoundError
+from ..domain.errors import NotFoundError
 from ..service import (
     closure_service,
+    dispatch_service,
     intake_service,
     outbound_service,
     query_service,
@@ -49,6 +50,11 @@ class Router:
             Route("POST", r"/api/outbound-trains/(?P<code>[^/]+)/sequencer", self._sequence),
             Route("POST", r"/api/outbound-trains/(?P<code>[^/]+)/depart", self._depart),
             Route("POST", r"/api/pull-runs/(?P<code>[^/]+)/advance", self._advance),
+            Route("GET", r"/api/dispatch", self._dispatch_board),
+            Route("POST", r"/api/outbound-trains/(?P<code>[^/]+)/dispatch", self._register_dispatch),
+            Route("GET", r"/api/dispatch/(?P<code>[^/]+)", self._dispatch_ticket),
+            Route("POST", r"/api/dispatch/(?P<code>[^/]+)/claim", self._claim_dispatch),
+            Route("POST", r"/api/dispatch/(?P<code>[^/]+)/cancel", self._cancel_dispatch),
         ]
 
     def dispatch(self, method: str, path: str, body: Any) -> tuple[int, dict[str, Any]]:
@@ -56,7 +62,11 @@ class Router:
             args = route.match(method, path)
             if args is None:
                 continue
-            value = route.handler(body, **args)
+            # Serialize every command so concurrent HTTP workers load, mutate,
+            # and commit against the same workspace atomically (claim exclusion
+            # and queue ordering depend on this).
+            with self.app.command_lock:
+                value = route.handler(body, **args)
             return 200, {"ok": True, "data": value}
         raise NotFoundError("route", f"{method} {path}")
 
@@ -92,6 +102,21 @@ class Router:
 
     def _advance(self, body: Any, code: str) -> dict[str, Any]:
         return run_service.advance_run(self.app, code, body)
+
+    def _dispatch_board(self, body: Any) -> dict[str, Any]:
+        return dispatch_service.dispatch_board(self.app)
+
+    def _register_dispatch(self, body: Any, code: str) -> dict[str, Any]:
+        return dispatch_service.register_dispatch(self.app, code, body)
+
+    def _dispatch_ticket(self, body: Any, code: str) -> dict[str, Any]:
+        return dispatch_service.get_ticket(self.app, code)
+
+    def _claim_dispatch(self, body: Any, code: str) -> dict[str, Any]:
+        return dispatch_service.claim_ticket(self.app, code, body)
+
+    def _cancel_dispatch(self, body: Any, code: str) -> dict[str, Any]:
+        return dispatch_service.cancel_ticket(self.app, code, body)
 
 
 __all__ = ["Route", "Router"]

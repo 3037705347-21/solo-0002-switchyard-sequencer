@@ -44,7 +44,10 @@ def execute_step(workspace: YardWorkspace, run: PullRun, step: MoveStep) -> str:
 
 
 def _execute_buffer(workspace: YardWorkspace, run: PullRun, step: MoveStep, car: FreightCar) -> str:
-    if car.state != CarState.STANDING:
+    # A blocker may stay RESERVED when a later queued ticket waits on it; the
+    # dispatch board's car-resource arbitration protects it while this run
+    # parks it in X1. Its state is preserved through buffer and return.
+    if car.state not in {CarState.STANDING, CarState.RESERVED}:
         raise StateTransitionError("car", str(car.state), "BUFFERED", "only standing cars can be buffered")
     _source_top_matches(workspace, step.source_code, step.car_code, "buffer")
     bay = workspace.buffer_bays[step.target_code]
@@ -77,7 +80,7 @@ def _execute_pull(workspace: YardWorkspace, run: PullRun, step: MoveStep, car: F
 
 
 def _execute_return(workspace: YardWorkspace, run: PullRun, step: MoveStep, car: FreightCar) -> str:
-    if car.state != CarState.STANDING:
+    if car.state not in {CarState.STANDING, CarState.RESERVED}:
         raise StateTransitionError("car", str(car.state), "RETURNED", "only standing cars can be returned")
     _bay_top_matches(workspace, step.source_code, step.car_code, "return")
     target = workspace.tracks.get(step.target_code)

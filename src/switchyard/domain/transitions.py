@@ -9,9 +9,11 @@ from .enums import (
     OutboundState,
     RunState,
     ShiftState,
+    TicketState,
 )
 from .errors import StateTransitionError
 from .intake import IntakeTrain
+from .dispatch import DispatchTicket
 from .outbound import OutboundTrain
 from .pull import PullRun
 from .shift import YardShift
@@ -68,13 +70,32 @@ def transition_outbound(train: OutboundTrain, target: OutboundState, reason: str
 
 def transition_run(run: PullRun, target: RunState, reason: str | None = None) -> None:
     allowed = {
-        RunState.QUEUED.value: {RunState.RUNNING.value, RunState.FAILED.value},
+        RunState.QUEUED.value: {RunState.RUNNING.value, RunState.FAILED.value, RunState.CANCELLED.value},
         RunState.RUNNING.value: {RunState.COMPLETED.value, RunState.FAILED.value},
         RunState.COMPLETED.value: set(),
         RunState.FAILED.value: set(),
+        RunState.CANCELLED.value: set(),
     }
     _check(str(run.state), str(target), allowed, "pull run", reason)
     run.state = target
+
+
+def transition_ticket(ticket: DispatchTicket, target: TicketState, reason: str | None = None) -> None:
+    allowed = {
+        TicketState.QUEUED.value: {
+            TicketState.CLAIMED.value,
+            TicketState.CANCELLED.value,
+        },
+        TicketState.CLAIMED.value: {
+            TicketState.RUNNING.value,
+            TicketState.CANCELLED.value,
+        },
+        TicketState.RUNNING.value: {TicketState.COMPLETED.value, TicketState.CANCELLED.value},
+        TicketState.COMPLETED.value: set(),
+        TicketState.CANCELLED.value: set(),
+    }
+    _check(str(ticket.state), str(target), allowed, "dispatch ticket", reason)
+    ticket.state = target
 
 
 def transition_shift(shift: YardShift, target: ShiftState, reason: str | None = None) -> None:
@@ -92,4 +113,5 @@ __all__ = [
     "transition_outbound",
     "transition_run",
     "transition_shift",
+    "transition_ticket",
 ]

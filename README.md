@@ -27,11 +27,38 @@ workflow checks exercise the real HTTP API:
 PYTHONPATH=src python3 checks/wf_intake_classify.py
 PYTHONPATH=src python3 checks/wf_outbound_sequence.py
 PYTHONPATH=src python3 checks/wf_pull_depart.py
+PYTHONPATH=src python3 checks/wf_pull_dispatch.py
 PYTHONPATH=src python3 checks/wf_close_shift.py
 ```
 
 Each check starts an isolated server on a free port with a temporary data
-directory and stops the server before exiting.
+directory and stops the server before exiting. The dispatch-board check keeps
+its data directory across a real server restart to prove the queue and claim
+tokens survive.
+
+## Pull dispatch board
+
+Queued pull plans share limited standing tracks and the single X1 transfer
+bay. Register a draft outbound at the board to receive a queue-ordered
+dispatch ticket that declares its source tracks, transfer bay, blocker cars,
+and target cars:
+
+```text
+POST /api/outbound-trains/OB-01/dispatch   {"transfer_code":"X1","client_id":"crew-A"}
+GET  /api/dispatch                         queue order, blockers, release actions
+POST /api/dispatch/TKT-0001/claim          {"client_id":"crew-A"} -> claim_token
+POST /api/pull-runs/RUN-OB-01-1/advance    {"steps":3,"claim_token":"..."}
+POST /api/dispatch/TKT-0001/cancel         {"client_id":"crew-A","claim_token":"..."}
+```
+
+A ticket blocked by an earlier ticket reports the blocking ticket, the
+overlapping declared resources, and the step at which each resource is
+released. Only the holding client can advance a claimed run; a repeat claim
+with the same client id and token is idempotent, and a different client is
+rejected with `RESOURCE_BUSY`. Tickets, tokens, and queue order persist in the
+workspace file. Cancelling an unstarted ticket returns its outbound to DRAFT,
+releases target-car reservations and declared track/X1 resources, and unblocks
+later tickets; a run already in progress cannot be cancelled.
 
 ## Directory structure
 

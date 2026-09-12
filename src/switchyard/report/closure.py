@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from ..domain.enums import CarState, OutboundState, RunState, TrackState
+from ..domain.enums import CarState, OutboundState, RunState, TicketState, TrackState
 
 
 def closure_blockers(workspace: Any) -> list[dict[str, Any]]:
@@ -25,6 +25,15 @@ def closure_blockers(workspace: Any) -> list[dict[str, Any]]:
                     "code": code,
                     "kind": "outbound",
                     "message": f"outbound {code} has not departed",
+                }
+            )
+    for code, ticket in workspace.dispatch_tickets.items():
+        if ticket.state in {TicketState.QUEUED, TicketState.CLAIMED, TicketState.RUNNING}:
+            blockers.append(
+                {
+                    "code": code,
+                    "kind": "dispatch_ticket",
+                    "message": f"dispatch ticket {code} is {ticket.state.value}",
                 }
             )
     for code, run in workspace.runs.items():

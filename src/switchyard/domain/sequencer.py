@@ -37,6 +37,8 @@ def plan_pull_run(
     tracks: dict[str, StandingTrack],
     transfer_bays: dict[str, BufferBay],
     transfer_code: str,
+    allow_reserved_blockers: bool = False,
+    reserve_only_targets: bool = False,
 ) -> PullRun:
     if outbound.state != OutboundState.DRAFT:
         raise StateTransitionError("outbound train", str(outbound.state), "PLANNED", "already has a plan")
@@ -82,7 +84,7 @@ def plan_pull_run(
             blocker_car = cars.get(blocker)
             if blocker_car is None:
                 _fail(_planning_failure("blocker-missing", f"blocker {blocker} is missing", blocker, source_code))
-            if blocker_car.state != CarState.STANDING:
+            if blocker_car.state != CarState.STANDING and not allow_reserved_blockers:
                 _fail(
                     _planning_failure(
                         "blocker-reserved",
@@ -114,6 +116,10 @@ def plan_pull_run(
             )
         )
     run = PullRun(code=run_code, outbound_code=outbound.code, transfer_code=transfer.code, steps=steps)
+    # Only the planned target cars are reserved. On the dispatch-board path
+    # (reserve_only_targets=True) blocker cars stay STANDING as well; the
+    # ticket's declared car resources and queue arbitration protect them so an
+    # earlier ticket can still buffer them during execution.
     for code in planned:
         transition_car(cars[code], CarState.RESERVED)
     transition_outbound(outbound, OutboundState.PLANNED)

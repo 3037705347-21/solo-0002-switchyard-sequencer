@@ -70,11 +70,21 @@ class ApiClient:
 
 
 class RunningServer:
-    def __init__(self, data_dir: Path | str | None = None):
-        self.port = free_port()
+    def __init__(self, data_dir: Path | str | None = None, port: int | None = None):
+        self.port = port or free_port()
         self.base_url = f"http://127.0.0.1:{self.port}"
-        self.temp_dir = tempfile.TemporaryDirectory(prefix="switchyard-check-")
-        data_dir = data_dir or Path(self.temp_dir.name) / "data"
+        self._owns_temp = data_dir is None
+        if data_dir is not None:
+            self.temp_dir = None
+            self.data_dir = Path(data_dir)
+        else:
+            self.temp_dir = tempfile.TemporaryDirectory(prefix="switchyard-check-")
+            self.data_dir = Path(self.temp_dir.name) / "data"
+        self.process: subprocess.Popen[str] | None = None
+        self.api = ApiClient(self.base_url)
+        self._start()
+
+    def _start(self) -> None:
         env = dict(os.environ)
         env["PYTHONPATH"] = str(SRC_DIR)
         self.process = subprocess.Popen(
@@ -87,7 +97,7 @@ class RunningServer:
                 "--port",
                 str(self.port),
                 "--data-dir",
-                str(data_dir),
+                str(self.data_dir),
             ],
             cwd=PROJECT_ROOT,
             env=env,
@@ -95,13 +105,17 @@ class RunningServer:
             stderr=subprocess.STDOUT,
             text=True,
         )
-        self.api = ApiClient(self.base_url)
+
+    def restart(self) -> None:
+        self.stop(keep_data=True)
+        self._start()
+        self.wait_ready()
 
     def wait_ready(self, timeout: float = 8.0) -> None:
         started = time.monotonic()
         last_error: Exception | None = None
         while time.monotonic() - started < timeout:
-            if self.process.poll() is not None:
+            if self.process is not None and self.process.poll() is not None:
                 output = ""
                 if self.process.stdout:
                     output = self.process.stdout.read()
@@ -115,20 +129,23 @@ class RunningServer:
                 time.sleep(0.05)
         raise AssertionError(f"server did not become ready: {last_error}")
 
-    def stop(self) -> None:
-        if self.process.poll() is None:
+    def stop(self, keep_data: bool = False) -> None:
+        if self.process is not None and self.process.poll() is None:
             self.process.terminate()
             try:
                 self.process.wait(timeout=5)
             except subprocess.TimeoutExpired:
                 self.process.kill()
                 self.process.wait(timeout=5)
-        if self.process.stdout:
+        if self.process is not None and self.process.stdout:
             self.process.stdout.close()
-        self.temp_dir.cleanup()
+        self.process = None
+        if not keep_data and self.temp_dir is not None:
+            self.temp_dir.cleanup()
+            self.temp_dir = None
 
     def output(self) -> str:
-        if self.process.stdout is None:
+        if self.process is None or self.process.stdout is None:
             return ""
         return self.process.stdout.read()
 

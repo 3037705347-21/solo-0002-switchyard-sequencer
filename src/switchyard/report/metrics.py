@@ -51,6 +51,9 @@ def yard_metrics(workspace: Any) -> dict[str, Any]:
     ]
     active_runs = [code for code, run in workspace.runs.items() if run.state in {RunState.QUEUED, RunState.RUNNING}]
     open_shifts = [code for code, shift in workspace.shifts.items() if shift.state == ShiftState.OPEN]
+    ticket_state_counts = {"queued": 0, "claimed": 0, "running": 0, "completed": 0, "cancelled": 0}
+    for ticket in workspace.dispatch_tickets.values():
+        ticket_state_counts[str(ticket.state).lower()] += 1
     return {
         "total_cars": len(cars),
         "car_state_counts": {
@@ -66,6 +69,7 @@ def yard_metrics(workspace: Any) -> dict[str, Any]:
         "active_intakes": sorted(active_intakes),
         "active_outbounds": sorted(active_outbounds),
         "active_runs": sorted(active_runs),
+        "dispatch_tickets": ticket_state_counts,
         "open_shifts": sorted(open_shifts),
         "event_count": len(workspace.events),
         "version": workspace.version,
