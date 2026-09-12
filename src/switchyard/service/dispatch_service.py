@@ -8,6 +8,7 @@ from typing import Any
 from ..domain.dispatch import (
     DispatchTicket,
     build_resources,
+    declaration_for,
     declared_resources,
     describe_ticket,
     evaluate_ticket,
@@ -15,7 +16,8 @@ from ..domain.dispatch import (
 )
 from ..domain.enums import CarState, EventKind, OutboundState, RunState, TicketState
 from ..domain.errors import ConflictError, NotFoundError, ResourceBusyError, StateTransitionError
-from ..domain.sequencer import plan_pull_run
+from ..domain.pull import MoveStep
+from ..domain.sequencer import derive_pull_steps, plan_pull_run, replan_registered_run
 from ..domain.timeutil import now_iso
 from ..domain.transitions import (
     transition_car,
@@ -53,10 +55,81 @@ def _active_ticket_for_outbound(workspace: Any, outbound_code: str) -> DispatchT
     return None
 
 
+def _steps_signature(steps: list[MoveStep]) -> list[tuple[str, str, str, str]]:
+    return [(str(step.verb), step.car_code, step.source_code, step.target_code) for step in steps]
+
+
+def _preview(workspace: Any, ticket: DispatchTicket) -> tuple[list[MoveStep] | None, set[str] | None]:
+    """Best-effort derivation against the current stacks for board display.
+
+    Read-only: returns (None, None) when the plan cannot currently be derived
+    (for example the target car has already been pulled), in which case the
+    stored steps and resources remain the source of truth.
+    """
+    run = workspace.runs.get(ticket.run_code)
+    outbound = workspace.outbounds.get(ticket.outbound_code)
+    if run is None or outbound is None:
+        return None, None
+    try:
+        steps = derive_pull_steps(
+            outbound,
+            workspace.cars,
+            workspace.tracks,
+            workspace.buffer_bays,
+            run.transfer_code,
+            allow_reserved_targets=True,
+            allow_reserved_blockers=True,
+            require_draft=False,
+        )
+    except Exception:  # noqa: BLE001 - preview must never break a read request
+        return None, None
+    declaration = declaration_for(steps, ticket.target_car_codes)
+    return steps, set(build_resources(declaration))
+
+
+def _refresh_ticket_plan(workspace: Any, ticket: DispatchTicket) -> tuple[Any, bool]:
+    """Re-derive the ticket's run steps from the current tracks.
+
+    Used at claim and at run start so plans never reuse buffer steps for cars
+    that an earlier ticket has since pulled away. The ticket code, run code,
+    and claim token are unchanged; only steps and the declared resources are
+    rebuilt. Returns (run, changed).
+    """
+    run = workspace.runs.get(ticket.run_code)
+    outbound = workspace.outbounds.get(ticket.outbound_code)
+    if run is None or outbound is None:
+        raise NotFoundError("pull run", ticket.run_code)
+    before = _steps_signature(run.steps)
+    replan_registered_run(
+        run,
+        outbound,
+        workspace.cars,
+        workspace.tracks,
+        workspace.buffer_bays,
+    )
+    changed = _steps_signature(run.steps) != before
+    if changed:
+        declaration = declaration_for(run.steps, ticket.target_car_codes)
+        ticket.source_tracks = declaration["source_tracks"]
+        ticket.transfer_bays = declaration["transfer_bays"]
+        ticket.buffer_car_codes = declaration["buffer_car_codes"]
+        ticket.resources = build_resources(declaration)
+    return run, changed
+
+
 def _view(workspace: Any, ticket: DispatchTicket) -> dict[str, Any]:
     run = workspace.runs.get(ticket.run_code)
     active = sorted(workspace.active_tickets(), key=lambda item: item.queue_order)
-    return describe_ticket(ticket, active, run)
+    preview_steps, preview_resources = (None, None)
+    if ticket.state in {TicketState.QUEUED, TicketState.CLAIMED}:
+        preview_steps, preview_resources = _preview(workspace, ticket)
+    return describe_ticket(
+        ticket,
+        active,
+        run,
+        preview_steps=preview_steps,
+        preview_resources=preview_resources,
+    )
 
 
 def register_dispatch(app: YardApplication, outbound_code: str, payload: Any) -> dict[str, Any]:
@@ -90,9 +163,6 @@ def register_dispatch(app: YardApplication, outbound_code: str, payload: Any) ->
         # A blocker reserved by an earlier queued ticket is a normal board
         # conflict: arbitration decides order instead of rejecting the queue.
         allow_reserved_blockers=True,
-        # Blocker cars stay STANDING; the ticket's declared car resources
-        # protect them so the leading ticket can still buffer them.
-        reserve_only_targets=True,
     )
     declaration = declared_resources(run)
     ticket = DispatchTicket(
@@ -148,31 +218,55 @@ def claim_ticket(app: YardApplication, ticket_code: str, payload: Any) -> dict[s
             claimed_by=ticket.claimed_by,
         )
     active = sorted(workspace.active_tickets(), key=lambda item: item.queue_order)
-    blockers = evaluate_ticket(ticket, active)
+    # Arbitrate against resources derived from the *current* stacks, not the
+    # stored declaration: an earlier ticket may already have pulled a blocker
+    # (or freed X1), making this ticket's stored conflicts obsolete.
+    _, current_resources = _preview(workspace, ticket)
+    blockers = evaluate_ticket(ticket, active, resources=current_resources)
     if blockers:
         raise ResourceBusyError(
             f"dispatch ticket {ticket.code} is blocked by {len(blockers)} earlier ticket(s)",
             ticket_code=ticket.code,
             blockers=blockers,
         )
+    # Re-derive against the current yard: earlier tickets may have pulled the
+    # blockers this plan buffered at registration time.
+    run, replanned = _refresh_ticket_plan(workspace, ticket)
     token = secrets.token_hex(16)
     transition_ticket(ticket, TicketState.CLAIMED)
     ticket.claimed_by = client_id
     ticket.claim_token = token
     ticket.claimed_at = now_iso()
-    event = workspace.record_event(
-        shift_code,
-        EventKind.DISPATCH_CLAIMED,
-        f"dispatch ticket {ticket.code} claimed by {client_id}",
-        {"ticket_code": ticket.code, "run_code": ticket.run_code, "client_id": client_id},
-    )
-    app.commit(workspace, event)
-    run = workspace.runs.get(ticket.run_code)
+    events = [
+        workspace.record_event(
+            shift_code,
+            EventKind.DISPATCH_CLAIMED,
+            f"dispatch ticket {ticket.code} claimed by {client_id}",
+            {"ticket_code": ticket.code, "run_code": ticket.run_code, "client_id": client_id},
+        )
+    ]
+    if replanned:
+        events.append(
+            workspace.record_event(
+                shift_code,
+                EventKind.DISPATCH_REPLANNED,
+                f"dispatch ticket {ticket.code} steps recomputed at claim",
+                {
+                    "ticket_code": ticket.code,
+                    "run_code": run.code,
+                    "steps": len(run.steps),
+                    "resources": list(ticket.resources),
+                    "at": "claim",
+                },
+            )
+        )
+    app.commit(workspace, events)
     return {
         "ticket": _view(workspace, ticket),
-        "pull_run": run.to_dict() if run is not None else None,
+        "pull_run": run.to_dict(),
         "claim_token": token,
         "idempotent": False,
+        "replanned": replanned,
     }
 
 
@@ -230,7 +324,20 @@ def _release_ticket(workspace: Any, ticket: DispatchTicket) -> None:
 def dispatch_board(app: YardApplication) -> dict[str, Any]:
     workspace = app.load()
     active = sorted(workspace.active_tickets(), key=lambda item: item.queue_order)
-    tickets = [describe_ticket(ticket, active, workspace.runs.get(ticket.run_code)) for ticket in active]
+    tickets = []
+    for ticket in active:
+        preview_steps, preview_resources = (None, None)
+        if ticket.state in {TicketState.QUEUED, TicketState.CLAIMED}:
+            preview_steps, preview_resources = _preview(workspace, ticket)
+        tickets.append(
+            describe_ticket(
+                ticket,
+                active,
+                workspace.runs.get(ticket.run_code),
+                preview_steps=preview_steps,
+                preview_resources=preview_resources,
+            )
+        )
     queue_codes = [ticket["code"] for ticket in tickets]
     return {
         "queue_order": queue_codes,
@@ -245,8 +352,27 @@ def get_ticket(app: YardApplication, ticket_code: str) -> dict[str, Any]:
     workspace = app.load()
     ticket = _ticket(workspace, ticket_code)
     active = sorted(workspace.active_tickets(), key=lambda item: item.queue_order)
-    view = describe_ticket(ticket, active, workspace.runs.get(ticket.run_code))
+    preview_steps, preview_resources = (None, None)
+    if ticket.state in {TicketState.QUEUED, TicketState.CLAIMED}:
+        preview_steps, preview_resources = _preview(workspace, ticket)
+    view = describe_ticket(
+        ticket,
+        active,
+        workspace.runs.get(ticket.run_code),
+        preview_steps=preview_steps,
+        preview_resources=preview_resources,
+    )
     return {"ticket": view}
+
+
+def refresh_claimed_ticket(workspace: Any, ticket: DispatchTicket) -> tuple[Any, bool]:
+    """Recompute steps for a claimed ticket when execution actually starts.
+
+    Defensive second refresh: claim already recomputed, but this covers any
+    stack change between claim and the first advance. The claim token is
+    untouched.
+    """
+    return _refresh_ticket_plan(workspace, ticket)
 
 
 __all__ = [
@@ -254,5 +380,6 @@ __all__ = [
     "claim_ticket",
     "dispatch_board",
     "get_ticket",
+    "refresh_claimed_ticket",
     "register_dispatch",
 ]

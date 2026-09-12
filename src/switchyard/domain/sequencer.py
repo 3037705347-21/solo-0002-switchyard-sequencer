@@ -2,14 +2,13 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 from .car import FreightCar
 from .enums import CarState, MoveVerb, OutboundState
 from .errors import StateTransitionError, ValidationError
 from .outbound import OutboundTrain
 from .pull import MoveStep, PullRun
-from .timeutil import now_iso
 from .track import BufferBay, StandingTrack
 from .transitions import transition_car, transition_outbound
 
@@ -30,17 +29,24 @@ def _planning_failure(code: str, message: str, car_code: str | None = None, trac
     return PlanningFailure(code=code, message=message, car_code=car_code, track_code=track_code)
 
 
-def plan_pull_run(
-    run_code: str,
+def derive_pull_steps(
     outbound: OutboundTrain,
     cars: dict[str, FreightCar],
     tracks: dict[str, StandingTrack],
     transfer_bays: dict[str, BufferBay],
     transfer_code: str,
+    *,
+    allow_reserved_targets: bool = False,
     allow_reserved_blockers: bool = False,
-    reserve_only_targets: bool = False,
-) -> PullRun:
-    if outbound.state != OutboundState.DRAFT:
+    require_draft: bool = True,
+) -> list[MoveStep]:
+    """Derive the buffer/pull/return steps from the *current* track stacks.
+
+    Pure function: it never changes car, run, or outbound state. Used both for
+    the initial plan and for re-deriving a queued ticket whose blockers may
+    have been pulled away by an earlier ticket.
+    """
+    if require_draft and outbound.state != OutboundState.DRAFT:
         raise StateTransitionError("outbound train", str(outbound.state), "PLANNED", "already has a plan")
     planned = list(outbound.planned_car_codes)
     if not planned:
@@ -55,7 +61,10 @@ def plan_pull_run(
         car = cars.get(code)
         if car is None:
             _fail(_planning_failure("car-missing", f"car {code} does not exist", code))
-        if car.state != CarState.STANDING:
+        valid_target = car.state == CarState.STANDING or (
+            allow_reserved_targets and car.state == CarState.RESERVED
+        )
+        if not valid_target:
             _fail(_planning_failure("car-not-standing", f"car {code} is not standing", code))
         if car.destination != outbound.destination:
             _fail(
@@ -115,16 +124,64 @@ def plan_pull_run(
                 track_code=transfer.code,
             )
         )
-    run = PullRun(code=run_code, outbound_code=outbound.code, transfer_code=transfer.code, steps=steps)
-    # Only the planned target cars are reserved. On the dispatch-board path
-    # (reserve_only_targets=True) blocker cars stay STANDING as well; the
-    # ticket's declared car resources and queue arbitration protect them so an
-    # earlier ticket can still buffer them during execution.
-    for code in planned:
+    return steps
+
+
+def plan_pull_run(
+    run_code: str,
+    outbound: OutboundTrain,
+    cars: dict[str, FreightCar],
+    tracks: dict[str, StandingTrack],
+    transfer_bays: dict[str, BufferBay],
+    transfer_code: str,
+    allow_reserved_blockers: bool = False,
+) -> PullRun:
+    steps = derive_pull_steps(
+        outbound,
+        cars,
+        tracks,
+        transfer_bays,
+        transfer_code,
+        allow_reserved_blockers=allow_reserved_blockers,
+    )
+    run = PullRun(code=run_code, outbound_code=outbound.code, transfer_code=transfer_code, steps=steps)
+    # Only the planned target cars are reserved. Blocker cars stay STANDING;
+    # on the dispatch-board path the ticket's declared car resources and queue
+    # arbitration protect them so an earlier ticket can still buffer them.
+    for code in outbound.planned_car_codes:
         transition_car(cars[code], CarState.RESERVED)
     transition_outbound(outbound, OutboundState.PLANNED)
     outbound.run_codes.append(run.code)
     return run
+
+
+def replan_registered_run(
+    run: PullRun,
+    outbound: OutboundTrain,
+    cars: dict[str, FreightCar],
+    tracks: dict[str, StandingTrack],
+    transfer_bays: dict[str, BufferBay],
+) -> list[MoveStep]:
+    """Rebuild a registered (queued) run's steps against the current yard.
+
+    The outbound is already PLANNED and its target cars already RESERVED, so
+    no state changes happen; only the move steps are replaced. Raises
+    ValidationError (car-not-in-stack / buffer-overflow) if the plan can no
+    longer be derived, in which case the ticket stays queued and blocked.
+    """
+    steps = derive_pull_steps(
+        outbound,
+        cars,
+        tracks,
+        transfer_bays,
+        run.transfer_code,
+        allow_reserved_targets=True,
+        allow_reserved_blockers=True,
+        require_draft=False,
+    )
+    run.steps = steps
+    run.current_step = 0
+    return steps
 
 
 def can_sequence(
@@ -152,4 +209,10 @@ def can_sequence(
     return failures
 
 
-__all__ = ["PlanningFailure", "can_sequence", "plan_pull_run"]
+__all__ = [
+    "PlanningFailure",
+    "can_sequence",
+    "derive_pull_steps",
+    "plan_pull_run",
+    "replan_registered_run",
+]

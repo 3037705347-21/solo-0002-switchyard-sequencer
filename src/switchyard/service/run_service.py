@@ -11,6 +11,7 @@ from ..domain.timeutil import now_iso
 from ..domain.transitions import transition_car, transition_outbound, transition_run, transition_ticket
 from ..domain.validators import parse_advance_steps
 from .context import YardApplication
+from .dispatch_service import refresh_claimed_ticket
 
 
 def _ensure_shift_open(workspace: Any) -> str:
@@ -65,6 +66,12 @@ def advance_run(app: YardApplication, run_code: str, payload: Any) -> dict[str, 
         raise ConflictError("pull run has failed", code=run_code)
     events: list[Any] = []
     if run.state == RunState.QUEUED:
+        replanned = False
+        if ticket is not None and ticket.state == TicketState.CLAIMED:
+            # Defensive second refresh between claim and first advance: never
+            # execute stale buffer steps if the source stack changed. The
+            # claim token and ownership are preserved.
+            run, replanned = refresh_claimed_ticket(workspace, ticket)
         transition_run(run, RunState.RUNNING)
         run.started_at = now_iso()
         if ticket is not None:
@@ -78,6 +85,21 @@ def advance_run(app: YardApplication, run_code: str, payload: Any) -> dict[str, 
                 {"total_steps": len(run.steps), "ticket_code": None if ticket is None else ticket.code},
             )
         )
+        if replanned and ticket is not None:
+            events.append(
+                workspace.record_event(
+                    shift_code,
+                    EventKind.DISPATCH_REPLANNED,
+                    f"dispatch ticket {ticket.code} steps recomputed at run start",
+                    {
+                        "ticket_code": ticket.code,
+                        "run_code": run.code,
+                        "steps": len(run.steps),
+                        "resources": list(ticket.resources),
+                        "at": "run_start",
+                    },
+                )
+            )
     executed = 0
     while executed < requested_steps and run.current_step < len(run.steps):
         step = run.steps[run.current_step]

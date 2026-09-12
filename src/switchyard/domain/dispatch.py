@@ -122,11 +122,78 @@ def _ordered_unique(values: list[str]) -> list[str]:
 
 def declared_resources(run: PullRun) -> dict[str, list[str]]:
     """Derive the resource declaration of a pull run from its move steps."""
+    return declared_resources_from_steps(run.steps)
+
+
+def build_resources(declaration: dict[str, list[str]]) -> list[str]:
+    resources: list[str] = []
+    resources.extend(f"track:{code}" for code in declaration["source_tracks"])
+    resources.extend(f"bay:{code}" for code in declaration["transfer_bays"])
+    resources.extend(f"car:{code}" for code in declaration["buffer_car_codes"])
+    return resources
+
+
+def release_actions_for(steps: list[MoveStep], transfer_code: str) -> list[dict[str, Any]]:
+    """Steps that hand declared yard resources back to the board."""
+    actions: list[dict[str, Any]] = []
+    if any(step.verb == MoveVerb.BUFFER for step in steps):
+        last_return = max(index for index, step in enumerate(steps) if step.verb == MoveVerb.RETURN)
+        actions.append(
+            {
+                "resource": f"bay:{transfer_code}",
+                "action": f"final RETURN into transfer bay {transfer_code}",
+                "step_index": last_return,
+                "step_total": len(steps),
+            }
+        )
+    last_track_step: dict[str, tuple[int, MoveVerb]] = {}
+    for index, step in enumerate(steps):
+        if step.verb in {MoveVerb.BUFFER, MoveVerb.PULL}:
+            last_track_step[step.source_code] = (index, step.verb)
+        elif step.verb == MoveVerb.RETURN:
+            last_track_step[step.target_code] = (index, step.verb)
+    for track_code, (index, verb) in last_track_step.items():
+        if verb == MoveVerb.RETURN:
+            action = f"final RETURN clears source track {track_code}"
+        else:
+            action = f"final PULL clears source track {track_code}"
+        actions.append(
+            {
+                "resource": f"track:{track_code}",
+                "action": action,
+                "step_index": index,
+                "step_total": len(steps),
+            }
+        )
+    for index, step in enumerate(steps):
+        if step.verb == MoveVerb.RETURN:
+            actions.append(
+                {
+                    "resource": f"car:{step.car_code}",
+                    "action": f"RETURN {step.car_code} from {transfer_code} to {step.target_code}",
+                    "step_index": index,
+                    "step_total": len(steps),
+                }
+            )
+    actions.sort(key=lambda item: (int(item["step_index"]), str(item["resource"])))
+    return actions
+
+
+def declaration_for(steps: list[MoveStep], target_codes: list[str]) -> dict[str, list[str]]:
+    """Resource declaration implied by a step list (targets stay reserved)."""
+    derived = declared_resources_from_steps(steps)
+    # Keep the original target list even if a target is pulled in a prior step
+    # of the same multi-car plan.
+    derived["target_car_codes"] = _ordered_unique(list(target_codes))
+    return derived
+
+
+def declared_resources_from_steps(steps: list[MoveStep]) -> dict[str, list[str]]:
     tracks: list[str] = []
     bays: list[str] = []
     buffer_cars: list[str] = []
     target_cars: list[str] = []
-    for step in run.steps:
+    for step in steps:
         if step.verb == MoveVerb.BUFFER:
             tracks.append(step.source_code)
             bays.append(step.target_code)
@@ -142,66 +209,18 @@ def declared_resources(run: PullRun) -> dict[str, list[str]]:
     }
 
 
-def build_resources(declaration: dict[str, list[str]]) -> list[str]:
-    resources: list[str] = []
-    resources.extend(f"track:{code}" for code in declaration["source_tracks"])
-    resources.extend(f"bay:{code}" for code in declaration["transfer_bays"])
-    resources.extend(f"car:{code}" for code in declaration["buffer_car_codes"])
-    return resources
-
-
-def _release_actions(run: PullRun) -> list[dict[str, Any]]:
-    """Steps that hand declared yard resources back to the board."""
-    actions: list[dict[str, Any]] = []
-    if any(step.verb == MoveVerb.BUFFER for step in run.steps):
-        last_return = max(index for index, step in enumerate(run.steps) if step.verb == MoveVerb.RETURN)
-        actions.append(
-            {
-                "resource": f"bay:{run.transfer_code}",
-                "action": f"final RETURN into transfer bay {run.transfer_code}",
-                "step_index": last_return,
-                "step_total": len(run.steps),
-            }
-        )
-    last_track_step: dict[str, tuple[int, MoveVerb]] = {}
-    for index, step in enumerate(run.steps):
-        if step.verb in {MoveVerb.BUFFER, MoveVerb.PULL}:
-            last_track_step[step.source_code] = (index, step.verb)
-        elif step.verb == MoveVerb.RETURN:
-            last_track_step[step.target_code] = (index, step.verb)
-    for track_code, (index, verb) in last_track_step.items():
-        if verb == MoveVerb.RETURN:
-            action = f"final RETURN clears source track {track_code}"
-        else:
-            action = f"final PULL clears source track {track_code}"
-        actions.append(
-            {
-                "resource": f"track:{track_code}",
-                "action": action,
-                "step_index": index,
-                "step_total": len(run.steps),
-            }
-        )
-    for index, step in enumerate(run.steps):
-        if step.verb == MoveVerb.RETURN:
-            actions.append(
-                {
-                    "resource": f"car:{step.car_code}",
-                    "action": f"RETURN {step.car_code} from {run.transfer_code} to {step.target_code}",
-                    "step_index": index,
-                    "step_total": len(run.steps),
-                }
-            )
-    actions.sort(key=lambda item: (int(item["step_index"]), str(item["resource"])))
-    return actions
-
-
 def evaluate_ticket(
     ticket: DispatchTicket,
     active_tickets: list[DispatchTicket],
+    resources: set[str] | None = None,
 ) -> list[dict[str, Any]]:
-    """Return blocker entries; an empty list means the ticket is eligible."""
-    mine = set(ticket.resources)
+    """Return blocker entries; an empty list means the ticket is eligible.
+
+    `resources` overrides the ticket's stored declaration with a set derived
+    from the current track stacks; this prevents stale stored resources (for
+    example a transfer bay no longer needed) from blocking a claim.
+    """
+    mine = set(ticket.resources) if resources is None else set(resources)
     blockers: list[dict[str, Any]] = []
     for other in active_tickets:
         if other.code == ticket.code or other.queue_order >= ticket.queue_order:
@@ -246,13 +265,31 @@ def describe_ticket(
     ticket: DispatchTicket,
     active_tickets: list[DispatchTicket],
     run: PullRun | None,
+    preview_steps: list[MoveStep] | None = None,
+    preview_resources: set[str] | None = None,
 ) -> dict[str, Any]:
-    """Public ticket view with eligibility, blockers, and release actions."""
+    """Public ticket view with eligibility, blockers, and release actions.
+
+    `preview_steps`/`preview_resources` (when derivable from the current yard)
+    are preferred over the stored values so the dispatcher sees release points
+    and blocking after blockers have been pulled away by earlier tickets.
+    """
     data = ticket.public_view()
-    blockers = evaluate_ticket(ticket, active_tickets) if ticket.is_active() else []
+    blockers = (
+        evaluate_ticket(ticket, active_tickets, resources=preview_resources)
+        if ticket.is_active()
+        else []
+    )
     data["eligible"] = not blockers and ticket.state == TicketState.QUEUED
     data["blocked_by"] = blockers
-    data["release_actions"] = _release_actions(run) if run is not None else []
+    if run is None:
+        data["release_actions"] = []
+    else:
+        steps = preview_steps if preview_steps is not None else run.steps
+        data["release_actions"] = release_actions_for(steps, run.transfer_code)
+        data["plan_stale"] = [step.to_dict() for step in steps] != [
+            step.to_dict() for step in run.steps
+        ]
     return data
 
 
@@ -260,8 +297,11 @@ __all__ = [
     "ACTIVE_TICKET_STATES",
     "DispatchTicket",
     "build_resources",
+    "declaration_for",
     "declared_resources",
+    "declared_resources_from_steps",
     "describe_ticket",
     "evaluate_ticket",
+    "release_actions_for",
     "resource_board",
 ]

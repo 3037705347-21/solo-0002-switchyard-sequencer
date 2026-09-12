@@ -28,6 +28,7 @@ PYTHONPATH=src python3 checks/wf_intake_classify.py
 PYTHONPATH=src python3 checks/wf_outbound_sequence.py
 PYTHONPATH=src python3 checks/wf_pull_depart.py
 PYTHONPATH=src python3 checks/wf_pull_dispatch.py
+PYTHONPATH=src python3 checks/wf_pull_reverse_order.py
 PYTHONPATH=src python3 checks/wf_close_shift.py
 ```
 
@@ -59,6 +60,13 @@ rejected with `RESOURCE_BUSY`. Tickets, tokens, and queue order persist in the
 workspace file. Cancelling an unstarted ticket returns its outbound to DRAFT,
 releases target-car reservations and declared track/X1 resources, and unblocks
 later tickets; a run already in progress cannot be cancelled.
+
+Steps are derived at registration and recomputed from the current stacks at
+claim and at run start, so when an earlier ticket pulls a blocker a later
+ticket buffered (reverse target order), the later ticket never executes stale
+buffer steps; the refreshed resources and `plan_stale` flag are shown on the
+board while the claim token, ticket and run codes stay stable
+(`checks/wf_pull_reverse_order.py` covers this across a restart).
 
 ## Directory structure
 

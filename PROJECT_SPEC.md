@@ -105,6 +105,17 @@ cancelled, returns the outbound to DRAFT, releases the target-car reservations
 and declared resources, and unblocks later tickets. A RUNNING ticket cannot be
 cancelled.
 
+Registered steps are derived from the track stack at registration time and can
+go stale when an earlier ticket pulls a car the later plan buffered as a
+blocker (for example a reverse target order where the first ticket takes the
+top car and a later ticket targets the bottom car). When a ticket is claimed,
+and again defensively when its run starts, the service recomputes its steps
+from the current stacks and refreshes the declared resources (a ticket that
+needed X1 at registration may no longer buffer anything, or vice versa). The
+ticket code, run code, owner, and claim token are unchanged by recomputation;
+the change is recorded as a `DISPATCH_REPLANNED` event and signalled by the
+`replanned` claim response field and the `plan_stale` board flag.
+
 ### 4. Close a shift with a yard balance
 
 Entry: `POST /api/shifts/{code}/close`, `GET /api/yard`
