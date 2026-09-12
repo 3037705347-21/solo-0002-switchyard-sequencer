@@ -71,7 +71,7 @@ def _execute_pull(workspace: YardWorkspace, run: PullRun, step: MoveStep, car: F
     if popped != step.car_code:
         raise ResourceBusyError(f"unexpected top car {popped} while pulling {step.car_code}")
     outbound.assembled_car_codes.append(step.car_code)
-    car.state = CarState.ASSEMBLED
+    transition_car(car, CarState.ASSEMBLED)
     car.location = outbound.code
     return f"pulled {car.code} onto {outbound.code}"
 

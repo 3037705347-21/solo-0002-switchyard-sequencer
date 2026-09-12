@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from ..domain.errors import ResourceBusyError
 from ..storage.repository import YardRepository
 from ..storage.workspace import YardWorkspace
 
@@ -28,4 +29,12 @@ class YardApplication:
         return self.repository.path_text()
 
 
-__all__ = ["YardApplication"]
+def require_open_shift(workspace: YardWorkspace, message_hint: str) -> str:
+    """Return the open shift code or reject the command context."""
+    for shift in workspace.shifts.values():
+        if str(shift.state) == "OPEN":
+            return shift.code
+    raise ResourceBusyError("no open shift", message_hint=message_hint)
+
+
+__all__ = ["YardApplication", "require_open_shift"]

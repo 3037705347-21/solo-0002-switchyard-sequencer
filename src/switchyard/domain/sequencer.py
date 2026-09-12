@@ -6,10 +6,9 @@ from dataclasses import dataclass, field
 
 from .car import FreightCar
 from .enums import CarState, MoveVerb, OutboundState
-from .errors import StateTransitionError, ValidationError
+from .errors import ValidationError
 from .outbound import OutboundTrain
 from .pull import MoveStep, PullRun
-from .timeutil import now_iso
 from .track import BufferBay, StandingTrack
 from .transitions import transition_car, transition_outbound
 
@@ -38,15 +37,11 @@ def plan_pull_run(
     transfer_bays: dict[str, BufferBay],
     transfer_code: str,
 ) -> PullRun:
-    if outbound.state != OutboundState.DRAFT:
-        raise StateTransitionError("outbound train", str(outbound.state), "PLANNED", "already has a plan")
     planned = list(outbound.planned_car_codes)
     if not planned:
         raise ValidationError("outbound train has no planned cars", **{"car_codes": ["must not be empty"]})
     planned_set = set(planned)
-    transfer = transfer_bays.get(transfer_code)
-    if transfer is None:
-        raise ValidationError("unknown transfer bay", **{"transfer_code": ["not found"]})
+    transfer = transfer_bays[transfer_code]
     working_stacks: dict[str, list[str]] = {}
     source_of: dict[str, str] = {}
     for code in planned:

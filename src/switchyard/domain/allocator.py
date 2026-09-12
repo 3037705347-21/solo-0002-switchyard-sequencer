@@ -6,10 +6,10 @@ from dataclasses import dataclass, field
 
 from .car import FreightCar
 from .enums import CarState, IntakeState, TrackPurpose
-from .errors import ConflictError
 from .intake import IntakeTrain
 from .rules import candidate_tracks_for, remaining_capacity_score
 from .track import StandingTrack
+from .transitions import transition_car, transition_intake
 
 
 @dataclass(slots=True)
@@ -42,8 +42,6 @@ def classify_intake(
     cars: dict[str, FreightCar],
     tracks: dict[str, StandingTrack],
 ) -> list[SpotRecord]:
-    if train.is_terminal():
-        raise ConflictError(f"intake {train.code} is already terminal")
     spots: list[SpotRecord] = []
     unplaced: list[str] = []
     for code in train.consist:
@@ -60,14 +58,14 @@ def classify_intake(
             unplaced.append(code)
             continue
         target.stack.append(car.code)
-        car.state = CarState.STANDING
+        transition_car(car, CarState.STANDING)
         car.location = target.code
         spots.append(SpotRecord(code, target.code, len(target.stack) - 1))
     train.unplaced = unplaced
     if unplaced:
-        train.state = IntakeState.PARTIAL
+        transition_intake(train, IntakeState.PARTIAL)
     else:
-        train.state = IntakeState.CLASSIFIED
+        transition_intake(train, IntakeState.CLASSIFIED)
     return spots
 
 

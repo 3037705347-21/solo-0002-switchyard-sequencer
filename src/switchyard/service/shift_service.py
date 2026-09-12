@@ -4,8 +4,9 @@ from __future__ import annotations
 
 from typing import Any
 
-from ..domain.enums import EventKind, ShiftState
-from ..domain.errors import ConflictError, NotFoundError, ResourceBusyError
+from ..domain import operations
+from ..domain.enums import EventKind
+from ..domain.errors import NotFoundError
 from ..domain.shift import YardShift
 from ..domain.validators import build_shift_payload
 from .context import YardApplication
@@ -14,16 +15,8 @@ from .context import YardApplication
 def open_shift(app: YardApplication, payload: Any) -> dict[str, Any]:
     code, dispatcher, opened_at = build_shift_payload(payload)
     workspace = app.load()
-    if code in workspace.shifts:
-        raise ConflictError("shift already exists", code=code)
-    for shift in workspace.shifts.values():
-        if shift.state == ShiftState.OPEN:
-            raise ResourceBusyError(
-                "another shift is still open",
-                open_shift=shift.code,
-            )
     shift = YardShift(code=code, dispatcher=dispatcher, opened_at=opened_at)
-    workspace.shifts[code] = shift
+    operations.open_shift(workspace, shift)
     event = workspace.record_event(
         code,
         EventKind.SHIFT_OPENED,

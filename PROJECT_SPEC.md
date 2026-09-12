@@ -111,8 +111,8 @@ view for verification.
 - `entry`: HTTP server, router, request parsing, and JSON envelopes.
 - `service`: application context and workflow commands that coordinate domain,
   storage, and report modules.
-- `domain`: enums, entities, validation, state transitions, allocation rules,
-  pull sequencing, and domain errors.
+- `domain`: enums, entities, validation, state transitions, workflow behaviors,
+  allocation rules, pull sequencing, and domain errors.
 - `storage`: workspace model, atomic persistence, seed tracks, and event
   journaling.
 - `report`: yard metrics, closure validation, and deterministic summaries.
