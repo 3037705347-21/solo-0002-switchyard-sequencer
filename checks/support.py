@@ -9,15 +9,19 @@ import subprocess
 import sys
 import tempfile
 import time
+import traceback
 import urllib.error
 import urllib.request
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 SRC_DIR = PROJECT_ROOT / "src"
-if str(SRC_DIR) not in sys.path:
-    sys.path.insert(0, str(SRC_DIR))
+CHECKS_DIR = PROJECT_ROOT / "checks"
+for path in (SRC_DIR, CHECKS_DIR):
+    if str(path) not in sys.path:
+        sys.path.insert(0, str(path))
 
 
 def free_port() -> int:
@@ -70,13 +74,19 @@ class ApiClient:
 
 
 class RunningServer:
+    """Run the service on an ephemeral port with an isolated data directory."""
+
     def __init__(self, data_dir: Path | str | None = None):
         self.port = free_port()
         self.base_url = f"http://127.0.0.1:{self.port}"
         self.temp_dir = tempfile.TemporaryDirectory(prefix="switchyard-check-")
-        data_dir = data_dir or Path(self.temp_dir.name) / "data"
+        self.data_dir = Path(data_dir) if data_dir is not None else Path(self.temp_dir.name) / "data"
         env = dict(os.environ)
         env["PYTHONPATH"] = str(SRC_DIR)
+        # Never leave .pyc files inside the source tree or a data directory.
+        env["PYTHONDONTWRITEBYTECODE"] = "1"
+        # Explicit --data-dir below makes this defensive only.
+        env.pop("SWITCHYARD_DATA_DIR", None)
         self.process = subprocess.Popen(
             [
                 sys.executable,
@@ -87,7 +97,7 @@ class RunningServer:
                 "--port",
                 str(self.port),
                 "--data-dir",
-                str(data_dir),
+                str(self.data_dir),
             ],
             cwd=PROJECT_ROOT,
             env=env,
@@ -96,16 +106,19 @@ class RunningServer:
             text=True,
         )
         self.api = ApiClient(self.base_url)
+        self._output = ""
+
+    def _drain(self) -> None:
+        if self.process.stdout is not None:
+            self._output += self.process.stdout.read()
 
     def wait_ready(self, timeout: float = 8.0) -> None:
         started = time.monotonic()
         last_error: Exception | None = None
         while time.monotonic() - started < timeout:
             if self.process.poll() is not None:
-                output = ""
-                if self.process.stdout:
-                    output = self.process.stdout.read()
-                raise AssertionError(f"server exited early:\n{output}")
+                self._drain()
+                raise AssertionError(f"server exited early:\n{self._output}")
             try:
                 status, body = self.api.get("/api/health")
                 if status == 200 and body.get("ok"):
@@ -123,25 +136,88 @@ class RunningServer:
             except subprocess.TimeoutExpired:
                 self.process.kill()
                 self.process.wait(timeout=5)
+        self._drain()
         if self.process.stdout:
             self.process.stdout.close()
         self.temp_dir.cleanup()
 
     def output(self) -> str:
-        if self.process.stdout is None:
-            return ""
-        return self.process.stdout.read()
+        return self._output
 
 
-def run_check(check_name: str, fn: Any) -> int:
+@dataclass
+class CheckResult:
+    name: str
+    passed: bool
+    detail: str = ""
+    server_output: str = ""
+    port: int | None = None
+    elapsed: float = 0.0
+
+
+def execute_check(check_name: str, fn: Callable[[ApiClient], None]) -> CheckResult:
+    """Run one workflow check against a fresh, isolated server."""
     server = RunningServer()
+    started = time.monotonic()
+    failure_detail: str | None = None
     try:
-        server.wait_ready()
-        fn(server.api)
-        print(f"OK {check_name}")
-        return 0
+        try:
+            server.wait_ready()
+            fn(server.api)
+        except Exception:  # noqa: BLE001 - report every failure with context
+            failure_detail = traceback.format_exc().rstrip()
     finally:
+        # Stop first: terminating the process is what unblocks output draining.
         server.stop()
+    elapsed = time.monotonic() - started
+    if failure_detail is not None:
+        return CheckResult(
+            name=check_name,
+            passed=False,
+            detail=failure_detail,
+            server_output=server.output(),
+            port=server.port,
+            elapsed=elapsed,
+        )
+    return CheckResult(
+        name=check_name,
+        passed=True,
+        server_output=server.output(),
+        port=server.port,
+        elapsed=elapsed,
+    )
 
 
-__all__ = ["ApiClient", "PROJECT_ROOT", "RunningServer", "SRC_DIR", "free_port", "run_check"]
+def format_failure(result: CheckResult) -> str:
+    lines = [
+        f"FAIL {result.name} (service http://127.0.0.1:{result.port})",
+        result.detail,
+        f"--- service output ({result.name}) ---",
+        result.server_output.rstrip() or "(no service output)",
+        f"--- end service output ({result.name}) ---",
+    ]
+    return "\n".join(lines)
+
+
+def run_check(check_name: str, fn: Callable[[ApiClient], None]) -> int:
+    """Entry point used by each wf_*.py when executed directly."""
+    result = execute_check(check_name, fn)
+    if result.passed:
+        print(f"OK {result.name}", flush=True)
+        return 0
+    print(format_failure(result), file=sys.stderr, flush=True)
+    return 1
+
+
+__all__ = [
+    "ApiClient",
+    "CHECKS_DIR",
+    "CheckResult",
+    "PROJECT_ROOT",
+    "RunningServer",
+    "SRC_DIR",
+    "execute_check",
+    "format_failure",
+    "free_port",
+    "run_check",
+]

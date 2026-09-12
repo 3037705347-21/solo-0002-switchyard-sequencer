@@ -17,11 +17,33 @@ Or use the environment variables `SWITCHYARD_PORT` and `SWITCHYARD_DATA_DIR`.
 The server exposes JSON endpoints under `/api`; `GET /api/health` returns a
 simple liveness payload.
 
-## Workflow checks
+## Verify everything locally
 
-Deferred test mode is active in this baseline: no unit tests are shipped, and a
-later engineering task stage adds red/green verification tests. Production
-workflow checks exercise the real HTTP API:
+One command runs the whole validation chain from any directory, with only the
+Python standard library installed:
+
+```bash
+python3 checks/run_all.py
+```
+
+It performs the steps in a fixed order and stops at the first failure:
+
+1. **source gate** — compile every Python file under `src/` and `checks/`, then
+   import every `switchyard` module (catches syntax and import errors before
+   any service starts);
+2. `wf_intake_classify` — open shift, accept intake, classify cars;
+3. `wf_outbound_sequence` — plan outbound consist and buffered pull run;
+4. `wf_pull_depart` — execute the pull run and depart the train;
+5. `wf_close_shift` — blocked closure, then a clean shift handoff.
+
+Each check starts an isolated server on an ephemeral port with a fresh
+temporary data directory; the command never writes into `data/` and does not
+depend on any file from a previous run, so it is safe to rerun. Exit code is
+non-zero on any failure, and the failing check name, offending HTTP request,
+traceback, and captured service output (including its port and state-file
+path) are printed before later steps are skipped.
+
+The individual checks can still be run on their own:
 
 ```bash
 PYTHONPATH=src python3 checks/wf_intake_classify.py
@@ -30,8 +52,7 @@ PYTHONPATH=src python3 checks/wf_pull_depart.py
 PYTHONPATH=src python3 checks/wf_close_shift.py
 ```
 
-Each check starts an isolated server on a free port with a temporary data
-directory and stops the server before exiting.
+Each check stops its server before exiting.
 
 ## Directory structure
 

@@ -5,6 +5,7 @@
   "project_shape": "backend",
   "source_extensions": [".py"],
   "build_command": "python3 -m compileall -q src checks",
+  "verify_command": "python3 checks/run_all.py",
   "testing": "deferred",
   "workflow_checks": [
     {
