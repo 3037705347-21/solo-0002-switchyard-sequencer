@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from ..domain.enums import CarState, OutboundState, RunState, TrackState
+from ..domain.enums import CarState, OutboundState, RunState, TrackState, WindowState
 
 
 def closure_blockers(workspace: Any) -> list[dict[str, Any]]:
@@ -43,6 +43,15 @@ def closure_blockers(workspace: Any) -> list[dict[str, Any]]:
                     "code": code,
                     "kind": "maintenance_track",
                     "message": f"maintenance track {code} still holds cars",
+                }
+            )
+    for code, window in workspace.maintenance_windows.items():
+        if window.state in {WindowState.FROZEN, WindowState.ACTIVE}:
+            blockers.append(
+                {
+                    "code": code,
+                    "kind": "maintenance_window",
+                    "message": f"maintenance window {code} is {window.state.value} on {window.track_code}",
                 }
             )
     for code, car in workspace.cars.items():

@@ -34,6 +34,8 @@ state as JSON files under a configurable data directory.
   sequence and an assembled sequence.
 - `PullRun`: a stateful sequence of buffer, pull, and return actions derived
   from a validated outbound plan.
+- `MaintenanceWindow`: a scheduled maintenance period for a standing track with
+  a reason, an owner, and a freeze/confirm/restore lifecycle.
 - `ClosureSnapshot`: an immutable metric set and blocker list produced when a
   shift closes.
 
@@ -79,10 +81,31 @@ Entry: `POST /api/shifts/{code}/close`, `GET /api/yard`
 
 The shift lead requests closure. The service computes standing, reserved,
 assembled, and departed car totals plus track occupancy and open-train counts.
-It blocks closure when any intake is open, any run is queued or running, or any
-standing track is in maintenance with cars present. When the checks pass, it
-stores a `ClosureSnapshot`, records the closure event, and exposes the yard
-view for verification.
+It blocks closure when any intake is open, any run is queued or running, any
+standing track is in maintenance with cars present, or any maintenance window
+is frozen or active. When the checks pass, it stores a `ClosureSnapshot`,
+records the closure event, and exposes the yard view for verification.
+
+### 5. Schedule a track maintenance window
+
+Entry: `POST /api/maintenance-windows`,
+`POST /api/maintenance-windows/{code}/freeze`,
+`POST /api/maintenance-windows/{code}/confirm`,
+`POST /api/maintenance-windows/{code}/restore`,
+`POST /api/maintenance-windows/{code}/cancel`,
+`GET /api/maintenance-windows`, `GET /api/maintenance-windows/{code}`
+
+The dispatcher schedules a maintenance window for a standing track with a
+planned start and end, a reason, and an owner. Freezing the window ahead of
+its start moves the track into the restricted state so the classifier stops
+assigning new cars to it, and records every affected unfinished plan: open or
+partial intakes, draft or planned outbounds with cars on the track, active
+pull runs that reference the track, and the cars still standing on it. Once
+the track is empty and no active pull run references it, the window is
+confirmed and the track enters maintenance. Restoring the window returns the
+track to the operational state. Cancelling a scheduled or frozen window lifts
+the freeze and returns the track to its pre-freeze state, leaving existing
+plans untouched. Finished windows remain queryable as history.
 
 ## State and rules
 
@@ -95,11 +118,17 @@ view for verification.
 - Pull runs move from `queued` to `running`, then `completed` or `failed`.
 - Car state moves from `received` to `standing`, `reserved`, `assembled`, and
   `departed`.
+- Maintenance windows move from `scheduled` to `frozen`, then `active`, then
+  `restored`; `scheduled` and `frozen` windows can be `cancelled` instead.
 - Destination-sorting tracks accept only cars whose destination matches the
   track affinity.
 - Hazardous cars require a hazard-rated track.
 - A track in maintenance cannot receive cars and cannot be used as a pull
   source.
+- A frozen (restricted) track receives no new intake assignments, but pull
+  plans that clear its remaining cars can still be created and executed.
+- A maintenance window can be confirmed only when its track is empty and no
+  queued or running pull run still references the track.
 - Track spotting cannot exceed car count or total length capacity.
 - A pull plan is valid only when every buffer move targets a standing car that
   is not reserved elsewhere and the transfer bay has enough capacity.
@@ -132,6 +161,13 @@ workspace snapshot and never mutate it.
 - `POST /api/pull-runs/{code}/advance`: execute the next pull actions.
 - `POST /api/outbound-trains/{code}/depart`: mark an assembled train departed.
 - `POST /api/shifts/{code}/close`: create a closure snapshot.
+- `POST /api/maintenance-windows`: schedule a track maintenance window.
+- `GET /api/maintenance-windows`: list all maintenance windows.
+- `GET /api/maintenance-windows/{code}`: return one maintenance window.
+- `POST /api/maintenance-windows/{code}/freeze`: freeze intake allocation.
+- `POST /api/maintenance-windows/{code}/confirm`: enter maintenance.
+- `POST /api/maintenance-windows/{code}/restore`: reopen the track.
+- `POST /api/maintenance-windows/{code}/cancel`: cancel and undo the freeze.
 - `GET /api/yard`: return the full yard view.
 - `GET /api/shifts/{code}`: return shift details and recent events.
 

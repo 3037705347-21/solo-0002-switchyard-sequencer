@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 from .car import FreightCar
 from .enums import (
     CarState,
@@ -9,12 +11,16 @@ from .enums import (
     OutboundState,
     RunState,
     ShiftState,
+    WindowState,
 )
 from .errors import StateTransitionError
 from .intake import IntakeTrain
 from .outbound import OutboundTrain
 from .pull import PullRun
 from .shift import YardShift
+
+if TYPE_CHECKING:
+    from .maintenance import MaintenanceWindow
 
 
 def _check(current: str, target: str, allowed: dict[str, set[str]], entity: str, reason: str | None = None) -> None:
@@ -86,10 +92,23 @@ def transition_shift(shift: YardShift, target: ShiftState, reason: str | None = 
     shift.state = target
 
 
+def transition_window(window: "MaintenanceWindow", target: WindowState, reason: str | None = None) -> None:
+    allowed = {
+        WindowState.SCHEDULED.value: {WindowState.FROZEN.value, WindowState.CANCELLED.value},
+        WindowState.FROZEN.value: {WindowState.ACTIVE.value, WindowState.CANCELLED.value},
+        WindowState.ACTIVE.value: {WindowState.RESTORED.value},
+        WindowState.RESTORED.value: set(),
+        WindowState.CANCELLED.value: set(),
+    }
+    _check(str(window.state), str(target), allowed, "maintenance window", reason)
+    window.state = target
+
+
 __all__ = [
     "transition_car",
     "transition_intake",
     "transition_outbound",
     "transition_run",
     "transition_shift",
+    "transition_window",
 ]

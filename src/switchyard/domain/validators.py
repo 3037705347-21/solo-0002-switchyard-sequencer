@@ -22,7 +22,7 @@ from .rules import (
     kind_known,
     normalize_destination,
 )
-from .timeutil import normalize_iso
+from .timeutil import duration_seconds, normalize_iso
 
 
 def require_object(raw: Any, field_name: str) -> dict[str, Any]:
@@ -174,6 +174,24 @@ def build_shift_payload(raw: Any) -> tuple[str, str, str]:
     return code, dispatcher, opened
 
 
+def build_maintenance_payload(raw: Any) -> tuple[str, str, str, str, str, str]:
+    body = require_object(raw, "payload")
+    code = require_text(body.get("code"), "code").upper()
+    if not is_entity_code(code, "MW"):
+        raise ValidationError("invalid maintenance window code", **{"code": ["expected prefix MW-"]})
+    track_code = require_text(body.get("track_code"), "track_code").upper()
+    planned_start = normalize_iso(require_text(body.get("planned_start"), "planned_start", 40))
+    planned_end = normalize_iso(require_text(body.get("planned_end"), "planned_end", 40))
+    if duration_seconds(planned_start, planned_end) <= 0:
+        raise ValidationError(
+            "planned end must be after planned start",
+            **{"planned_end": ["must be later than planned_start"]},
+        )
+    reason = require_text(body.get("reason"), "reason", 120)
+    owner = require_text(body.get("owner"), "owner", 30)
+    return code, track_code, planned_start, planned_end, reason, owner
+
+
 def parse_advance_steps(raw: Any) -> int:
     body = require_object(raw, "payload")
     steps = body.get("steps", 1)
@@ -192,6 +210,7 @@ def parse_transfer_code(raw: Any) -> str:
 
 __all__ = [
     "build_intake_payload",
+    "build_maintenance_payload",
     "build_outbound_payload",
     "build_shift_payload",
     "parse_advance_steps",

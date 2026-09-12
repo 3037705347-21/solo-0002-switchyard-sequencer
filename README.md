@@ -28,6 +28,10 @@ PYTHONPATH=src python3 checks/wf_intake_classify.py
 PYTHONPATH=src python3 checks/wf_outbound_sequence.py
 PYTHONPATH=src python3 checks/wf_pull_depart.py
 PYTHONPATH=src python3 checks/wf_close_shift.py
+PYTHONPATH=src python3 checks/wf_maintenance_freeze.py
+PYTHONPATH=src python3 checks/wf_maintenance_confirm.py
+PYTHONPATH=src python3 checks/wf_maintenance_cancel.py
+PYTHONPATH=src python3 checks/wf_maintenance_restart.py
 ```
 
 Each check starts an isolated server on a free port with a temporary data
@@ -67,6 +71,20 @@ POST /api/pull-runs/RUN-01/advance
 POST /api/outbound-trains/OB-01/depart
 POST /api/shifts/SHIFT-01/close
 GET  /api/yard
+```
+
+Track maintenance is scheduled through maintenance windows, which freeze
+intake allocation ahead of the window, list affected unfinished plans, and
+gate the track's entry into and exit from the maintenance state:
+
+```text
+POST /api/maintenance-windows
+POST /api/maintenance-windows/MW-01/freeze
+POST /api/maintenance-windows/MW-01/confirm
+POST /api/maintenance-windows/MW-01/restore
+POST /api/maintenance-windows/MW-01/cancel
+GET  /api/maintenance-windows
+GET  /api/maintenance-windows/MW-01
 ```
 
 Request and response examples are embedded in the project specification and in

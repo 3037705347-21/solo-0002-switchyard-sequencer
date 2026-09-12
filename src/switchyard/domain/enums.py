@@ -79,6 +79,14 @@ class ShiftState(EnumValue):
     CLOSED = "CLOSED"
 
 
+class WindowState(EnumValue):
+    SCHEDULED = "SCHEDULED"
+    FROZEN = "FROZEN"
+    ACTIVE = "ACTIVE"
+    RESTORED = "RESTORED"
+    CANCELLED = "CANCELLED"
+
+
 class MoveVerb(EnumValue):
     BUFFER = "BUFFER"
     RETURN = "RETURN"
@@ -98,6 +106,11 @@ class EventKind(EnumValue):
     SHIFT_CLOSED = "SHIFT_CLOSED"
     CLOSURE_BLOCKED = "CLOSURE_BLOCKED"
     YARD_VIEWED = "YARD_VIEWED"
+    MAINTENANCE_SCHEDULED = "MAINTENANCE_SCHEDULED"
+    MAINTENANCE_FROZEN = "MAINTENANCE_FROZEN"
+    MAINTENANCE_CONFIRMED = "MAINTENANCE_CONFIRMED"
+    MAINTENANCE_RESTORED = "MAINTENANCE_RESTORED"
+    MAINTENANCE_CANCELLED = "MAINTENANCE_CANCELLED"
 
 
 __all__ = [
@@ -112,4 +125,5 @@ __all__ = [
     "ShiftState",
     "TrackPurpose",
     "TrackState",
+    "WindowState",
 ]

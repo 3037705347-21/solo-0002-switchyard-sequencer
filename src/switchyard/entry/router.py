@@ -9,6 +9,7 @@ from ..domain.errors import DomainError, NotFoundError
 from ..service import (
     closure_service,
     intake_service,
+    maintenance_service,
     outbound_service,
     query_service,
     run_service,
@@ -49,6 +50,13 @@ class Router:
             Route("POST", r"/api/outbound-trains/(?P<code>[^/]+)/sequencer", self._sequence),
             Route("POST", r"/api/outbound-trains/(?P<code>[^/]+)/depart", self._depart),
             Route("POST", r"/api/pull-runs/(?P<code>[^/]+)/advance", self._advance),
+            Route("POST", r"/api/maintenance-windows", self._schedule_window),
+            Route("GET", r"/api/maintenance-windows", self._list_windows),
+            Route("GET", r"/api/maintenance-windows/(?P<code>[^/]+)", self._get_window),
+            Route("POST", r"/api/maintenance-windows/(?P<code>[^/]+)/freeze", self._freeze_window),
+            Route("POST", r"/api/maintenance-windows/(?P<code>[^/]+)/confirm", self._confirm_window),
+            Route("POST", r"/api/maintenance-windows/(?P<code>[^/]+)/restore", self._restore_window),
+            Route("POST", r"/api/maintenance-windows/(?P<code>[^/]+)/cancel", self._cancel_window),
         ]
 
     def dispatch(self, method: str, path: str, body: Any) -> tuple[int, dict[str, Any]]:
@@ -92,6 +100,27 @@ class Router:
 
     def _advance(self, body: Any, code: str) -> dict[str, Any]:
         return run_service.advance_run(self.app, code, body)
+
+    def _schedule_window(self, body: Any) -> dict[str, Any]:
+        return maintenance_service.schedule_window(self.app, body)
+
+    def _list_windows(self, body: Any) -> dict[str, Any]:
+        return maintenance_service.list_windows(self.app)
+
+    def _get_window(self, body: Any, code: str) -> dict[str, Any]:
+        return maintenance_service.get_window(self.app, code)
+
+    def _freeze_window(self, body: Any, code: str) -> dict[str, Any]:
+        return maintenance_service.freeze_window_command(self.app, code)
+
+    def _confirm_window(self, body: Any, code: str) -> dict[str, Any]:
+        return maintenance_service.confirm_window_command(self.app, code)
+
+    def _restore_window(self, body: Any, code: str) -> dict[str, Any]:
+        return maintenance_service.restore_window_command(self.app, code)
+
+    def _cancel_window(self, body: Any, code: str) -> dict[str, Any]:
+        return maintenance_service.cancel_window_command(self.app, code)
 
 
 __all__ = ["Route", "Router"]
