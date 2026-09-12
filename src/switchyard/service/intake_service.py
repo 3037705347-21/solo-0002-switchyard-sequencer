@@ -5,10 +5,12 @@ from __future__ import annotations
 from typing import Any
 
 from ..domain.allocator import classify_intake
+from ..domain.cancellation import OUTCOME_REMOVED, OUTCOME_RETAINED, cancel_intake
 from ..domain.car import CarInput, FreightCar
 from ..domain.enums import CarKind, CarState, EventKind, IntakeState
 from ..domain.errors import ConflictError, NotFoundError, ResourceBusyError, ValidationError
-from ..domain.validators import build_intake_payload
+from ..domain.timeutil import now_iso
+from ..domain.validators import build_intake_payload, parse_cancel_reason
 from .context import YardApplication
 
 
@@ -85,6 +87,48 @@ def classify_intake_command(app: YardApplication, intake_code: str) -> dict[str,
     }
 
 
+def cancel_intake_command(app: YardApplication, intake_code: str, payload: Any) -> dict[str, Any]:
+    reason = parse_cancel_reason(payload)
+    workspace = app.load()
+    shift_code = _ensure_shift_open(workspace)
+    train = workspace.intakes.get(intake_code)
+    if train is None:
+        raise NotFoundError("intake train", intake_code)
+    if train.state == IntakeState.CLASSIFIED:
+        raise ValidationError(
+            "classified intake cannot be cancelled",
+            **{"intake_code": [f"current state is {train.state.value}"]},
+        )
+    if train.state == IntakeState.CANCELLED:
+        raise ConflictError("intake train is already cancelled", intake_code=intake_code)
+    dispositions = cancel_intake(train, workspace, reason)
+    cancelled_at = now_iso()
+    train.cancelled_at = cancelled_at
+    train.cancel_reason = reason
+    removed = [item.car_code for item in dispositions if item.outcome == OUTCOME_REMOVED]
+    retained = [item.car_code for item in dispositions if item.outcome == OUTCOME_RETAINED]
+    event = workspace.record_event(
+        shift_code,
+        EventKind.TRAIN_CANCELLED,
+        f"intake {train.code} cancelled: {reason}",
+        {
+            "reason": reason,
+            "cancelled_at": cancelled_at,
+            "removed_car_codes": removed,
+            "retained_car_codes": retained,
+            "dispositions": [item.to_dict() for item in dispositions],
+        },
+    )
+    app.commit(workspace, event)
+    return {
+        "intake": train.to_dict(),
+        "reason": reason,
+        "removed_car_codes": removed,
+        "retained_car_codes": retained,
+        "dispositions": [item.to_dict() for item in dispositions],
+    }
+
+
 def _car_from_input(item: CarInput) -> FreightCar:
     return FreightCar(
         code=item.code,
@@ -99,4 +143,4 @@ def _car_from_input(item: CarInput) -> FreightCar:
     )
 
 
-__all__ = ["classify_intake_command", "create_intake"]
+__all__ = ["cancel_intake_command", "classify_intake_command", "create_intake"]

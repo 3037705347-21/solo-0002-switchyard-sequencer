@@ -174,6 +174,11 @@ def build_shift_payload(raw: Any) -> tuple[str, str, str]:
     return code, dispatcher, opened
 
 
+def parse_cancel_reason(raw: Any) -> str:
+    body = require_object(raw, "payload")
+    return require_text(body.get("reason"), "reason", 200)
+
+
 def parse_advance_steps(raw: Any) -> int:
     body = require_object(raw, "payload")
     steps = body.get("steps", 1)
@@ -195,6 +200,7 @@ __all__ = [
     "build_outbound_payload",
     "build_shift_payload",
     "parse_advance_steps",
+    "parse_cancel_reason",
     "parse_car_input",
     "parse_transfer_code",
     "require_integer",

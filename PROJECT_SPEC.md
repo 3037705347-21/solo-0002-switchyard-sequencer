@@ -42,7 +42,8 @@ state as JSON files under a configurable data directory.
 ### 1. Open a shift and classify an intake train
 
 Entry: `POST /api/shifts`, `POST /api/intake-trains`,
-`POST /api/intake-trains/{code}/classify`
+`POST /api/intake-trains/{code}/classify`,
+`POST /api/intake-trains/{code}/cancel`
 
 The dispatcher opens a shift, submits an inbound train with a car manifest, and
 asks the classifier to place every car onto an active standing track. The
@@ -50,6 +51,14 @@ service validates car codes, dimensions, hazard classes, destination routes,
 and duplicate codes, then applies destination affinity, hazard rating, and
 capacity rules. A fully classified train is persisted and every placed car
 becomes available for outbound planning.
+
+If the train code or consist was entered wrong, the dispatcher can cancel an
+intake while it is still `OPEN` or `PARTIAL`, submitting a mandatory reason.
+Unplaced cars leave circulation as `REMOVED`, placed cars that have no outbound
+commitment are popped from their track stack and become `REMOVED`, and the train
+ends in `CANCELLED` with per-car dispositions and the reason recorded. Cars that
+are already planned, reserved, assembled, or departed are retained untouched,
+and a `CLASSIFIED` intake cannot be cancelled.
 
 ### 2. Plan an outbound pull sequence
 
@@ -88,8 +97,12 @@ view for verification.
 
 - Shift state transitions from `open` to `closed` only through an approved
   closure check.
-- Intake state moves from `open` through `partial` to `classified`; cancellation
-  is allowed only before classification.
+- Intake state moves from `open` through `partial` to `classified`; `open` and
+  `partial` intakes can move to `cancelled` with a recorded reason, after which
+  no further transition is allowed.
+- Cars removed through an intake cancellation move from `received` or `standing`
+  to `removed`; removed cars stay in history and keep their code occupied under
+  the normal uniqueness rules.
 - Outbound state moves from `draft` to `planned` when a pull run is created,
   then to `ready` when assembly completes, then to `departed`.
 - Pull runs move from `queued` to `running`, then `completed` or `failed`.
@@ -127,6 +140,7 @@ workspace snapshot and never mutate it.
 - `POST /api/shifts`: open a shift.
 - `POST /api/intake-trains`: create an inbound train.
 - `POST /api/intake-trains/{code}/classify`: place cars on standing tracks.
+- `POST /api/intake-trains/{code}/cancel`: cancel an open or partial intake with a reason.
 - `POST /api/outbound-trains`: create an outbound train.
 - `POST /api/outbound-trains/{code}/sequencer`: create a pull run.
 - `POST /api/pull-runs/{code}/advance`: execute the next pull actions.

@@ -17,6 +17,9 @@ class IntakeTrain:
     unplaced: list[str] = field(default_factory=list)
     placed_at: str | None = None
     note: str = ""
+    cancelled_at: str | None = None
+    cancel_reason: str = ""
+    car_dispositions: list[dict[str, object]] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, object]:
         return {
@@ -28,6 +31,9 @@ class IntakeTrain:
             "unplaced": list(self.unplaced),
             "placed_at": self.placed_at,
             "note": self.note,
+            "cancelled_at": self.cancelled_at,
+            "cancel_reason": self.cancel_reason,
+            "car_dispositions": [dict(item) for item in self.car_dispositions],
         }
 
     @classmethod
@@ -41,6 +47,9 @@ class IntakeTrain:
             unplaced=[str(item) for item in raw.get("unplaced", [])],
             placed_at=None if raw.get("placed_at") is None else str(raw["placed_at"]),
             note=str(raw.get("note", "")),
+            cancelled_at=None if raw.get("cancelled_at") is None else str(raw["cancelled_at"]),
+            cancel_reason=str(raw.get("cancel_reason", "")),
+            car_dispositions=[dict(item) for item in raw.get("car_dispositions", [])],
         )
 
     def is_terminal(self) -> bool:
