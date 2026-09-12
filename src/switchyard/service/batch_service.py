@@ -131,13 +131,21 @@ def import_intake_batch(app: YardApplication, payload: Any) -> dict[str, Any]:
     plan = build_batch_plan(document)
     plan.source_sha256 = source["source_sha256"]
 
-    if plan.issues:
-        raise _reject(plan, status_code="VALIDATION_ERROR", message="batch failed validation")
+    if not plan.accepted:
+        # Defensive: every rejected row is expected to carry at least one
+        # located issue; refuse to write rather than crash mid-batch if a
+        # validator ever drops its locator.
+        raise _reject(
+            plan,
+            status_code="VALIDATION_ERROR",
+            message="batch failed validation",
+        )
 
     # Plan passes every structural and in-batch rule; check yard state.  No
-    # mutation has happened yet.
+    # mutation has happened yet.  Conflict issues are attached to plan (and to
+    # the offending train/car rows), so any clash flips plan.accepted.
     conflicts = annotate_yard_conflicts(plan, workspace)
-    if conflicts:
+    if conflicts or not plan.accepted:
         raise _reject(
             plan,
             status_code="CONFLICT",
@@ -154,11 +162,15 @@ def import_intake_batch(app: YardApplication, payload: Any) -> dict[str, Any]:
 
     for row in plan.trains:
         train = row.train
-        assert train is not None  # guaranteed by plan.accepted
+        if train is None:  # unreachable after plan.accepted, but never write half a batch
+            raise _reject(plan, status_code="VALIDATION_ERROR", message="batch failed validation")
         train.batch_code = plan.code
         cars = []
         for car_row in row.cars:
-            car = car_from_input(car_row.car)
+            car_input = car_row.car
+            if car_input is None:
+                raise _reject(plan, status_code="VALIDATION_ERROR", message="batch failed validation")
+            car = car_from_input(car_input)
             workspace.cars[car.code] = car
             cars.append(car)
             created_cars.append(car)

@@ -26,6 +26,7 @@ workflow checks exercise the real HTTP API:
 ```bash
 PYTHONPATH=src python3 checks/wf_intake_classify.py
 PYTHONPATH=src python3 checks/wf_batch_intake.py
+PYTHONPATH=src python3 checks/batch_commit_atomic.py
 PYTHONPATH=src python3 checks/wf_outbound_sequence.py
 PYTHONPATH=src python3 checks/wf_pull_depart.py
 PYTHONPATH=src python3 checks/wf_close_shift.py

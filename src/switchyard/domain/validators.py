@@ -47,7 +47,10 @@ def require_boolean(raw: Any, field_name: str, default: bool = False) -> bool:
     if raw is None:
         return default
     if not isinstance(raw, bool):
-        raise ValidationError(f"{field_name} must be a boolean", **{field_name: ["must be true or false"]})
+        raise ValidationError(
+            f"{field_name} must be a boolean",
+            fields={field_name: ["must be true or false"]},
+        )
     return raw
 
 

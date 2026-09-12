@@ -135,6 +135,48 @@ def dimension_and_empty_batch() -> dict[str, Any]:
     }
 
 
+def invalid_loaded_batch() -> dict[str, Any]:
+    """Cars whose loaded flag is not a JSON boolean must locate, not 500."""
+    return {
+        "code": "BATCH-20260912-04",
+        "received_at": "2026-09-12T08:50:00Z",
+        "note": "non-boolean loaded flags",
+        "trains": [
+            {
+                "code": "INT-301",
+                "route": "RAIL-31",
+                "arrival_at": "2026-09-12T08:48:00Z",
+                "cars": [
+                    {
+                        "code": "C-N4-301",
+                        "kind": "BOX",
+                        "destination": "N4",
+                        "loaded": "true",  # string, not boolean
+                        "length_m": 18,
+                        "danger_class": "NONE",
+                    },
+                    {
+                        "code": "C-N4-302",
+                        "kind": "BOX",
+                        "destination": "N4",
+                        "loaded": 1,  # integer, not boolean
+                        "length_m": 18,
+                        "danger_class": "NONE",
+                    },
+                    {
+                        "code": "C-N4-303",
+                        "kind": "HOPPER",
+                        "destination": "N4",
+                        "loaded": True,
+                        "length_m": 20,
+                        "danger_class": "NONE",
+                    },
+                ],
+            }
+        ],
+    }
+
+
 def issue_map(error: dict[str, Any]) -> dict[str, str]:
     report = error.get("details", {}).get("report", {})
     issues = report.get("issues", [])
@@ -154,6 +196,7 @@ def run(api: ApiClient) -> None:
         good_path = write_manifest(directory, "good.json", valid_batch())
         duplicate_path = write_manifest(directory, "duplicate.json", cross_train_duplicate_batch())
         bad_path = write_manifest(directory, "bad.json", dimension_and_empty_batch())
+        bool_path = write_manifest(directory, "bad_loaded.json", invalid_loaded_batch())
 
         # --- 1. valid multi-train batch ----------------------------------
         yard_before = api.expect_ok("GET", "/api/yard")
@@ -280,6 +323,25 @@ def run(api: ApiClient) -> None:
         renamed_codes = {item["code"] for item in renamed_error["details"]["report"]["issues"]}
         assert "BATCH_SOURCE_ALREADY_IMPORTED" in renamed_codes
         assert renamed_error["details"]["report"]["issue_count"] >= 1
+
+        # --- 4. non-boolean loaded flags must locate per car, never 500 ----
+        bool_error = api.request("POST", "/api/intake-batches", {"source_path": str(bool_path)})
+        status, body = bool_error
+        assert status == 422, f"expected 422 for non-boolean loaded, got {status} {body}"
+        assert body["ok"] is False
+        bool_issues = issue_map(body["error"])
+        assert bool_issues["trains[0].cars[0].loaded"] == "CAR_LOADED_INVALID"
+        assert bool_issues["trains[0].cars[1].loaded"] == "CAR_LOADED_INVALID"
+        # the valid third car is still reported with its locator/status
+        bool_report = body["error"]["details"]["report"]
+        assert bool_report["trains"][0]["cars"][2]["code"] == "C-N4-303"
+        assert bool_report["trains"][0]["cars"][2]["status"] == "accepted"
+        assert bool_report["trains"][0]["status"] == "rejected"
+        # whole-batch rejection: nothing from this file landed
+        yard = api.expect_ok("GET", "/api/yard")
+        assert yard["metrics"]["total_cars"] == 4
+        missing = api.expect_error("GET", "/api/intake-batches/BATCH-20260912-04")
+        assert missing["code"] == "NOT_FOUND"
 
         # Structural garbage also rejects cleanly with batch-level locators.
         broken_path = directory / "broken.json"

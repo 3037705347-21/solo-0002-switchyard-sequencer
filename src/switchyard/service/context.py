@@ -17,12 +17,12 @@ class YardApplication:
         return self.repository.load()
 
     def commit(self, workspace: YardWorkspace, events: list[object] | object | None = None) -> None:
-        self.repository.save(workspace)
         if events is None:
+            # No audit events: just replace the state file atomically.
+            self.repository.save(workspace)
             return
         items = events if isinstance(events, list) else [events]
-        for event in items:
-            self.repository.journal_event(workspace, event)
+        self.repository.commit(workspace, items)
 
     def data_path(self) -> str:
         return self.repository.path_text()

@@ -83,6 +83,19 @@ car codes, event sequences) for later troubleshooting, and every imported
 intake carries its `batch_code`. Re-importing the same file is rejected, even
 under a new batch code, via the content hash.
 
+Every field in a car manifest is validated as part of the whole batch — a
+`loaded` value that is not a JSON boolean (for example the string `"true"`)
+returns a 422 with the car located at `trains[i].cars[j].loaded`, never a 500.
+
+Commits follow write-ahead ordering shared by every state-changing command:
+the commit's event lines are appended to the journal in one fsync'd write
+first, and only then is the state file atomically replaced. If the event
+write fails, no state change happens; if the state replace fails, the journal
+lines just appended are truncated away. A partial event write truncates
+itself back to the pre-commit size. Hence trains, cars, the batch record, and
+events either all persist or none do, for batch and single-train entries
+alike.
+
 ### 2. Plan an outbound pull sequence
 
 Entry: `POST /api/outbound-trains`, `POST /api/outbound-trains/{code}/sequencer`
