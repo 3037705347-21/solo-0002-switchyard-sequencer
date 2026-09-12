@@ -36,6 +36,9 @@ state as JSON files under a configurable data directory.
   from a validated outbound plan.
 - `ClosureSnapshot`: an immutable metric set and blocker list produced when a
   shift closes.
+- `CarDeactivation`: an auditable withdrawal record with disposition (HOLD or
+  RETIRE), operator, reason, the car's prior state/location/stack slot, and the
+  eventual recovery decision.
 
 ## Workflows
 
@@ -84,6 +87,43 @@ standing track is in maintenance with cars present. When the checks pass, it
 stores a `ClosureSnapshot`, records the closure event, and exposes the yard
 view for verification.
 
+### 5. Deactivate and recover a vehicle
+
+Entry: `POST /api/car-deactivations`, `POST /api/car-recoveries`,
+`GET /api/car-deactivations`, `GET /api/car-deactivations/{code}`, plus
+`POST /api/outbound-trains/{code}/abandon` and
+`POST /api/intake-trains/{code}/cancel` as the resolution actions advertised by
+the conflict list.
+
+The operator submits a car code, a reason, an operator id and a disposition
+(HOLD or RETIRE). The service locates the car across every structure: standing
+track stacks (including its stack depth), transfer bays, open/classified
+intakes, outbound planned and assembled consists, and remaining pull-run
+steps. If the car is free (a standing car physically present on one track),
+the service removes it from that exact stack slot, transitions it to REMOVED
+at location OUT_OF_SERVICE, and stores a `CarDeactivation` capturing the prior
+state, location and stack index. A deactivated car is excluded from intake
+re-admission and from new outbound plans/sequences.
+
+If the car is referenced by an active job, state is left unchanged and the
+command fails with a deterministic, executable conflict list:
+
+- running pull run: advance the run to completion (the single resolution while
+  cars are moving between track, bay and assembly);
+- queued pull run / reserved or assembled car: finish the run, or abandon the
+  outbound plan to release reservations and return assembled cars to their
+  source tracks;
+- car parked in a transfer bay: return it by completing its run;
+- unclassified car on an open intake: cancel the intake;
+- departed car: permanently refused, no action available.
+
+A HOLD is recoverable: the car is re-validated against track rules and placed
+back at its original stack index, or on an explicit `target_track` when the
+original is full or in maintenance. A RETIRE is permanent and recovery is
+rejected. Every deactivation, blocked attempt, recovery and recovery block is
+journaled, counted on the record (`blocked_attempts`), and reloaded with the
+workspace so decisions remain consistent across restarts.
+
 ## State and rules
 
 - Shift state transitions from `open` to `closed` only through an approved
@@ -94,7 +134,12 @@ view for verification.
   then to `ready` when assembly completes, then to `departed`.
 - Pull runs move from `queued` to `running`, then `completed` or `failed`.
 - Car state moves from `received` to `standing`, `reserved`, `assembled`, and
-  `departed`.
+  `departed`; a deactivated car moves to `removed` at `OUT_OF_SERVICE`, from
+  which a HOLD (but not a RETIRE) can return it to `standing`.
+- A car may be deactivated only when no active job references it; otherwise the
+  operation is rejected and the returned conflict list must be resolved
+  first. Deactivated cars cannot be re-admitted on an intake or chosen by a new
+  outbound plan.
 - Destination-sorting tracks accept only cars whose destination matches the
   track affinity.
 - Hazardous cars require a hazard-rated track.
@@ -132,6 +177,15 @@ workspace snapshot and never mutate it.
 - `POST /api/pull-runs/{code}/advance`: execute the next pull actions.
 - `POST /api/outbound-trains/{code}/depart`: mark an assembled train departed.
 - `POST /api/shifts/{code}/close`: create a closure snapshot.
+- `POST /api/car-deactivations`: withdraw a car (HOLD or RETIRE) or return the
+  executable conflict list.
+- `POST /api/car-recoveries`: clear a HOLD and return the car to service.
+- `GET /api/car-deactivations`: list withdrawal records and active car codes.
+- `GET /api/car-deactivations/{code}`: one record with current car attribution.
+- `POST /api/outbound-trains/{code}/abandon`: release a plan's reservations and
+  return assembled cars to source tracks.
+- `POST /api/intake-trains/{code}/cancel`: cancel an intake before
+  classification.
 - `GET /api/yard`: return the full yard view.
 - `GET /api/shifts/{code}`: return shift details and recent events.
 

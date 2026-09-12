@@ -8,6 +8,7 @@ from typing import Any, Callable
 from ..domain.errors import DomainError, NotFoundError
 from ..service import (
     closure_service,
+    deactivation_service,
     intake_service,
     outbound_service,
     query_service,
@@ -45,10 +46,16 @@ class Router:
             Route("POST", r"/api/shifts/(?P<code>[^/]+)/close", self._close_shift),
             Route("POST", r"/api/intake-trains", self._create_intake),
             Route("POST", r"/api/intake-trains/(?P<code>[^/]+)/classify", self._classify),
+            Route("POST", r"/api/intake-trains/(?P<code>[^/]+)/cancel", self._cancel_intake),
             Route("POST", r"/api/outbound-trains", self._create_outbound),
             Route("POST", r"/api/outbound-trains/(?P<code>[^/]+)/sequencer", self._sequence),
             Route("POST", r"/api/outbound-trains/(?P<code>[^/]+)/depart", self._depart),
+            Route("POST", r"/api/outbound-trains/(?P<code>[^/]+)/abandon", self._abandon_outbound),
             Route("POST", r"/api/pull-runs/(?P<code>[^/]+)/advance", self._advance),
+            Route("POST", r"/api/car-deactivations", self._deactivate_car),
+            Route("GET", r"/api/car-deactivations", self._list_deactivations),
+            Route("GET", r"/api/car-deactivations/(?P<code>[^/]+)", self._get_deactivation),
+            Route("POST", r"/api/car-recoveries", self._recover_car),
         ]
 
     def dispatch(self, method: str, path: str, body: Any) -> tuple[int, dict[str, Any]]:
@@ -81,6 +88,9 @@ class Router:
     def _classify(self, body: Any, code: str) -> dict[str, Any]:
         return intake_service.classify_intake_command(self.app, code)
 
+    def _cancel_intake(self, body: Any, code: str) -> dict[str, Any]:
+        return intake_service.cancel_intake(self.app, code)
+
     def _create_outbound(self, body: Any) -> dict[str, Any]:
         return outbound_service.create_outbound(self.app, body)
 
@@ -90,8 +100,23 @@ class Router:
     def _depart(self, body: Any, code: str) -> dict[str, Any]:
         return run_service.depart_outbound(self.app, code)
 
+    def _abandon_outbound(self, body: Any, code: str) -> dict[str, Any]:
+        return outbound_service.abandon_outbound(self.app, code)
+
     def _advance(self, body: Any, code: str) -> dict[str, Any]:
         return run_service.advance_run(self.app, code, body)
+
+    def _deactivate_car(self, body: Any) -> dict[str, Any]:
+        return deactivation_service.deactivate_car(self.app, body)
+
+    def _recover_car(self, body: Any) -> dict[str, Any]:
+        return deactivation_service.recover_car(self.app, body)
+
+    def _list_deactivations(self, body: Any) -> dict[str, Any]:
+        return deactivation_service.list_deactivations(self.app)
+
+    def _get_deactivation(self, body: Any, code: str) -> dict[str, Any]:
+        return deactivation_service.get_deactivation(self.app, code)
 
 
 __all__ = ["Route", "Router"]

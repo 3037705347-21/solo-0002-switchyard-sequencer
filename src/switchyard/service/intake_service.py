@@ -8,6 +8,7 @@ from ..domain.allocator import classify_intake
 from ..domain.car import CarInput, FreightCar
 from ..domain.enums import CarKind, CarState, EventKind, IntakeState
 from ..domain.errors import ConflictError, NotFoundError, ResourceBusyError, ValidationError
+from ..domain.transitions import transition_intake
 from ..domain.validators import build_intake_payload
 from .context import YardApplication
 
@@ -27,6 +28,12 @@ def create_intake(app: YardApplication, payload: Any) -> dict[str, Any]:
         raise ConflictError("intake train already exists", code=train.code)
     for item in car_inputs:
         if item.code in workspace.cars:
+            existing = workspace.cars[item.code]
+            if existing.state == CarState.REMOVED:
+                raise ResourceBusyError(
+                    f"car {item.code} is out of service and cannot be re-admitted",
+                    car_code=item.code,
+                )
             raise ConflictError("car code already exists", code=item.code)
     cars: list[FreightCar] = []
     for item in car_inputs:
@@ -85,6 +92,39 @@ def classify_intake_command(app: YardApplication, intake_code: str) -> dict[str,
     }
 
 
+def cancel_intake(app: YardApplication, intake_code: str) -> dict[str, Any]:
+    workspace = app.load()
+    shift_code = _ensure_shift_open(workspace)
+    train = workspace.intakes.get(intake_code)
+    if train is None:
+        raise NotFoundError("intake train", intake_code)
+    if train.state == IntakeState.CANCELLED:
+        raise ConflictError("intake train is already cancelled", code=intake_code)
+    if train.state == IntakeState.CLASSIFIED:
+        raise ValidationError(
+            "classified intake cannot be cancelled",
+            **{"intake_code": ["already classified"]},
+        )
+    released: list[str] = []
+    for code in train.consist:
+        car = workspace.cars.get(code)
+        if car is None:
+            continue
+        if car.state == CarState.RECEIVED and car.location == "INTAKE":
+            del workspace.cars[code]
+            released.append(code)
+    transition_intake(train, IntakeState.CANCELLED)
+    train.unplaced = []
+    event = workspace.record_event(
+        shift_code,
+        EventKind.TRAIN_CANCELLED,
+        f"intake {intake_code} cancelled before classification",
+        {"released_car_codes": released},
+    )
+    app.commit(workspace, event)
+    return {"intake": train.to_dict(), "released_car_codes": released}
+
+
 def _car_from_input(item: CarInput) -> FreightCar:
     return FreightCar(
         code=item.code,
@@ -99,4 +139,4 @@ def _car_from_input(item: CarInput) -> FreightCar:
     )
 
 
-__all__ = ["classify_intake_command", "create_intake"]
+__all__ = ["cancel_intake", "classify_intake_command", "create_intake"]

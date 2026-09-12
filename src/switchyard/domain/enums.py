@@ -79,6 +79,18 @@ class ShiftState(EnumValue):
     CLOSED = "CLOSED"
 
 
+class DeactivationKind(EnumValue):
+    """HOLD is a recoverable suspension; RETIRE is a permanent withdrawal."""
+
+    HOLD = "HOLD"
+    RETIRE = "RETIRE"
+
+
+class DeactivationStatus(EnumValue):
+    ACTIVE = "ACTIVE"
+    RECOVERED = "RECOVERED"
+
+
 class MoveVerb(EnumValue):
     BUFFER = "BUFFER"
     RETURN = "RETURN"
@@ -98,11 +110,19 @@ class EventKind(EnumValue):
     SHIFT_CLOSED = "SHIFT_CLOSED"
     CLOSURE_BLOCKED = "CLOSURE_BLOCKED"
     YARD_VIEWED = "YARD_VIEWED"
+    TRAIN_CANCELLED = "TRAIN_CANCELLED"
+    OUTBOUND_ABANDONED = "OUTBOUND_ABANDONED"
+    CAR_DEACTIVATED = "CAR_DEACTIVATED"
+    CAR_DEACTIVATION_BLOCKED = "CAR_DEACTIVATION_BLOCKED"
+    CAR_RECOVERED = "CAR_RECOVERED"
+    CAR_RECOVERY_BLOCKED = "CAR_RECOVERY_BLOCKED"
 
 
 __all__ = [
     "CarKind",
     "CarState",
+    "DeactivationKind",
+    "DeactivationStatus",
     "EnumValue",
     "EventKind",
     "IntakeState",

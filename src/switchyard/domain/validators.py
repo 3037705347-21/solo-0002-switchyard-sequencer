@@ -6,7 +6,7 @@ import re
 from typing import Any
 
 from .car import CarInput, FreightCar
-from .enums import CarKind
+from .enums import CarKind, DeactivationKind
 from .errors import ValidationError
 from .intake import IntakeTrain
 from .outbound import OutboundTrain
@@ -190,9 +190,45 @@ def parse_transfer_code(raw: Any) -> str:
     return transfer
 
 
+def build_deactivation_payload(raw: Any) -> tuple[str, DeactivationKind, str, str]:
+    body = require_object(raw, "payload")
+    car_code = require_text(body.get("car_code"), "car_code").upper()
+    if not is_car_code(car_code):
+        raise ValidationError("invalid car code", **{"car_code": ["expected format C-PREFIX-NUMBER"]})
+    kind_text = str(body.get("kind") or "HOLD").strip().upper()
+    try:
+        kind = DeactivationKind.parse(kind_text)
+    except ValueError:
+        raise ValidationError(
+            "unknown deactivation kind",
+            **{"kind": ["HOLD (temporary, recoverable) or RETIRE (permanent withdrawal)"]},
+        ) from None
+    reason = require_text(body.get("reason"), "reason", 200)
+    operator = require_text(body.get("operator"), "operator", 30)
+    return car_code, kind, reason, operator
+
+
+def build_recovery_payload(raw: Any) -> tuple[str, str, str, str | None]:
+    body = require_object(raw, "payload")
+    car_code = require_text(body.get("car_code"), "car_code").upper()
+    if not is_car_code(car_code):
+        raise ValidationError("invalid car code", **{"car_code": ["expected format C-PREFIX-NUMBER"]})
+    reason = require_text(body.get("reason"), "reason", 200)
+    operator = require_text(body.get("operator"), "operator", 30)
+    target_raw = body.get("target_track")
+    target_track = None
+    if target_raw is not None and str(target_raw).strip():
+        target_track = require_text(target_raw, "target_track", 20).upper()
+        if not re.fullmatch(r"[A-Z][A-Z0-9_-]{0,19}", target_track):
+            raise ValidationError("invalid target track", **{"target_track": ["expected a track code"]})
+    return car_code, reason, operator, target_track
+
+
 __all__ = [
+    "build_deactivation_payload",
     "build_intake_payload",
     "build_outbound_payload",
+    "build_recovery_payload",
     "build_shift_payload",
     "parse_advance_steps",
     "parse_car_input",

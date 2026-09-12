@@ -18,6 +18,7 @@ class YardWorkspace:
     schema_version: int = SCHEMA_VERSION
     version: int = 1
     next_event_sequence: int = 1
+    next_deactivation_sequence: int = 1
     tracks: dict[str, StandingTrack] = field(default_factory=dict)
     buffer_bays: dict[str, BufferBay] = field(default_factory=dict)
     cars: dict[str, Any] = field(default_factory=dict)
@@ -25,6 +26,7 @@ class YardWorkspace:
     outbounds: dict[str, Any] = field(default_factory=dict)
     runs: dict[str, Any] = field(default_factory=dict)
     shifts: dict[str, Any] = field(default_factory=dict)
+    deactivations: dict[str, Any] = field(default_factory=dict)
     events: list[YardEvent] = field(default_factory=list)
     closure_snapshots: list[dict[str, Any]] = field(default_factory=list)
 
@@ -56,6 +58,12 @@ class YardWorkspace:
 
     def bay(self, code: str) -> BufferBay:
         return self.buffer_bays[code]
+
+    def active_deactivation(self, car_code: str) -> Any:
+        for record in self.deactivations.values():
+            if record.car_code == car_code and str(record.status) == "ACTIVE":
+                return record
+        return None
 
 
 __all__ = ["SCHEMA_VERSION", "YardWorkspace"]

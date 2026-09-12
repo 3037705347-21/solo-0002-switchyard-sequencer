@@ -28,6 +28,7 @@ PYTHONPATH=src python3 checks/wf_intake_classify.py
 PYTHONPATH=src python3 checks/wf_outbound_sequence.py
 PYTHONPATH=src python3 checks/wf_pull_depart.py
 PYTHONPATH=src python3 checks/wf_close_shift.py
+PYTHONPATH=src python3 checks/wf_car_deactivation.py
 ```
 
 Each check starts an isolated server on a free port with a temporary data
@@ -48,6 +49,41 @@ data/                     runtime JSON data (created on first run)
 The repository stores one versioned workspace file plus an append-only event
 journal. Every write goes through a same-directory temporary file and an atomic
 replace, so interrupted writes do not leave partial state.
+
+## Vehicle deactivation and recovery
+
+When a car must stop working, the operator submits its code, a reason, and a
+disposition (`HOLD` for a recoverable suspension or `RETIRE` for a permanent
+withdrawal). The service first confirms the car's real attribution across
+standing tracks, transfer bays, intakes, outbound plans/assemblies and pull
+runs. If any active job still references it, deactivation is rejected without
+touching state and the response carries an executable `conflicts` list whose
+`action_method` / `action_path` / `action_payload` entries resolve each
+reference (advance a running pull run, abandon an outbound plan, cancel an
+open intake). A free standing car is pulled out of its track slot, moved to
+state `REMOVED` at location `OUT_OF_SERVICE`, and can no longer be classified,
+selected by a new outbound plan, or re-admitted on an intake.
+
+Resolution endpoints backing the conflict list:
+
+- `POST /api/outbound-trains/{code}/abandon` releases reservations and returns
+  assembled cars to their source tracks (refused while a bay holds buffered
+  cars; advance the run to completion instead).
+- `POST /api/intake-trains/{code}/cancel` cancels an intake before
+  classification and removes its unclassified cars.
+
+Recovery endpoints:
+
+- `POST /api/car-recoveries` clears a `HOLD`, restoring the car to its original
+  track slot (pass `target_track` to place it elsewhere if the original track
+  is full or in maintenance). `RETIRE` cannot be recovered.
+- `GET /api/car-deactivations` lists every decision;
+  `GET /api/car-deactivations/{code}` shows one record with the car's current
+  attribution.
+
+Every decision, blocked attempt, recovery and recovery block is written to the
+event journal (`CAR_DEACTIVATED`, `CAR_DEACTIVATION_BLOCKED`,
+`CAR_RECOVERED`, `CAR_RECOVERY_BLOCKED`) and survives service restarts.
 
 ## Environment variables
 

@@ -20,6 +20,7 @@ def yard_view(app: YardApplication) -> dict[str, Any]:
         "metrics": summary["metrics"],
         "blockers": summary["blockers"],
         "shifts": [shift.to_dict() for shift in workspace.shifts.values()],
+        "deactivations": [record.to_dict() for record in workspace.deactivations.values()],
     }
 
 
