@@ -52,6 +52,26 @@ def run(api: ApiClient) -> None:
             ],
         },
     )
+    # an open intake for an unrelated destination must stay out of the freeze list
+    api.expect_ok(
+        "POST",
+        "/api/intake-trains",
+        {
+            "code": "INT-90",
+            "route": "RAIL-90",
+            "arrival_at": "2026-09-10T09:45:00Z",
+            "cars": [
+                {
+                    "code": "C-E7-90",
+                    "kind": "BOX",
+                    "destination": "E7",
+                    "loaded": True,
+                    "length_m": 18,
+                    "danger_class": "NONE",
+                }
+            ],
+        },
+    )
     api.expect_ok(
         "POST",
         "/api/outbound-trains",
@@ -95,6 +115,9 @@ def run(api: ApiClient) -> None:
     assert "INT-52" in codes
     assert "OB-51" in codes
     assert "C-N4-51" in codes
+    assert "INT-90" not in codes
+    intake_entries = [plan for plan in frozen["affected_plans"] if plan["kind"] == "intake"]
+    assert [plan["code"] for plan in intake_entries] == ["INT-52"]
     again = api.expect_error("POST", "/api/maintenance-windows/MW-01/freeze", {})
     assert again["code"] == "STATE_TRANSITION"
     yard = api.expect_ok("GET", "/api/yard")
@@ -103,6 +126,9 @@ def run(api: ApiClient) -> None:
     # the frozen track no longer receives new intake assignments
     classified2 = api.expect_ok("POST", "/api/intake-trains/INT-52/classify", {})
     assert classified2["spots"][0]["track_code"] == "MIX-1"
+    # the unrelated intake is untouched by the freeze and classifies normally
+    classified3 = api.expect_ok("POST", "/api/intake-trains/INT-90/classify", {})
+    assert classified3["spots"][0]["track_code"] == "E7-A"
     # a frozen window blocks shift closure through the existing blocker rules
     blocked = api.expect_error("POST", "/api/shifts/SHIFT-10/close", {})
     assert blocked["code"] == "RESOURCE_BUSY"

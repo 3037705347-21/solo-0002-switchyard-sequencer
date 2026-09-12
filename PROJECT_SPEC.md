@@ -99,8 +99,9 @@ The dispatcher schedules a maintenance window for a standing track with a
 planned start and end, a reason, and an owner. Freezing the window ahead of
 its start moves the track into the restricted state so the classifier stops
 assigning new cars to it, and records every affected unfinished plan: open or
-partial intakes, draft or planned outbounds with cars on the track, active
-pull runs that reference the track, and the cars still standing on it. Once
+partial intakes whose unplaced cars are compatible with the track, draft or
+planned outbounds with cars on the track, active pull runs that reference the
+track, and the cars still standing on it. Once
 the track is empty and no active pull run references it, the window is
 confirmed and the track enters maintenance. Restoring the window returns the
 track to the operational state. Cancelling a scheduled or frozen window lifts

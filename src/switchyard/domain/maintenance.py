@@ -7,6 +7,7 @@ from typing import Any
 
 from .enums import CarState, IntakeState, OutboundState, RunState, TrackState, WindowState
 from .errors import NotFoundError, ResourceBusyError, StateTransitionError
+from .rules import destination_allowed, hazard_allowed, kind_allowed
 from .timeutil import now_iso
 from .transitions import transition_window
 
@@ -112,6 +113,15 @@ def _active_runs_touching(workspace: Any, track_code: str) -> list[str]:
     return codes
 
 
+def _car_matches_track(track: Any, car: Any) -> bool:
+    """True when the track is a compatible allocation target for the car."""
+    return (
+        destination_allowed(track, car)
+        and kind_allowed(track, car)
+        and hazard_allowed(track, car)
+    )
+
+
 def collect_affected_plans(workspace: Any, track_code: str) -> list[AffectedPlan]:
     """List every unfinished classification or pull plan touching a track."""
     track = workspace.tracks.get(track_code)
@@ -122,16 +132,20 @@ def collect_affected_plans(workspace: Any, track_code: str) -> list[AffectedPlan
         intake = workspace.intakes[code]
         if intake.state not in {IntakeState.OPEN, IntakeState.PARTIAL}:
             continue
-        pending = sum(
-            1
+        related = [
+            car_code
             for car_code in intake.consist
-            if workspace.cars.get(car_code) is not None and workspace.cars[car_code].state == CarState.RECEIVED
-        )
+            if workspace.cars.get(car_code) is not None
+            and workspace.cars[car_code].state == CarState.RECEIVED
+            and _car_matches_track(track, workspace.cars[car_code])
+        ]
+        if not related:
+            continue
         plans.append(
             AffectedPlan(
                 "intake",
                 code,
-                f"intake {code} is {intake.state.value} with {pending} car(s) awaiting classification",
+                f"intake {code} is {intake.state.value} with {len(related)} unplaced car(s) compatible with {track_code}",
             )
         )
     for code in sorted(workspace.outbounds):
