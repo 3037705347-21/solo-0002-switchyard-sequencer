@@ -12,7 +12,7 @@ from ..domain.validators import build_intake_payload
 from .context import YardApplication
 
 
-def _ensure_shift_open(workspace: Any) -> str:
+def ensure_open_shift(workspace: Any) -> str:
     for shift in workspace.shifts.values():
         if str(shift.state) == "OPEN":
             return shift.code
@@ -22,7 +22,7 @@ def _ensure_shift_open(workspace: Any) -> str:
 def create_intake(app: YardApplication, payload: Any) -> dict[str, Any]:
     train, car_inputs = build_intake_payload(payload)
     workspace = app.load()
-    shift_code = _ensure_shift_open(workspace)
+    shift_code = ensure_open_shift(workspace)
     if train.code in workspace.intakes:
         raise ConflictError("intake train already exists", code=train.code)
     for item in car_inputs:
@@ -30,7 +30,7 @@ def create_intake(app: YardApplication, payload: Any) -> dict[str, Any]:
             raise ConflictError("car code already exists", code=item.code)
     cars: list[FreightCar] = []
     for item in car_inputs:
-        car = _car_from_input(item)
+        car = car_from_input(item)
         workspace.cars[car.code] = car
         cars.append(car)
     train.state = IntakeState.OPEN
@@ -51,7 +51,7 @@ def create_intake(app: YardApplication, payload: Any) -> dict[str, Any]:
 
 def classify_intake_command(app: YardApplication, intake_code: str) -> dict[str, Any]:
     workspace = app.load()
-    shift_code = _ensure_shift_open(workspace)
+    shift_code = ensure_open_shift(workspace)
     train = workspace.intakes.get(intake_code)
     if train is None:
         raise NotFoundError("intake train", intake_code)
@@ -85,7 +85,7 @@ def classify_intake_command(app: YardApplication, intake_code: str) -> dict[str,
     }
 
 
-def _car_from_input(item: CarInput) -> FreightCar:
+def car_from_input(item: CarInput) -> FreightCar:
     return FreightCar(
         code=item.code,
         kind=CarKind.parse(item.kind),
@@ -99,4 +99,4 @@ def _car_from_input(item: CarInput) -> FreightCar:
     )
 
 
-__all__ = ["classify_intake_command", "create_intake"]
+__all__ = ["car_from_input", "classify_intake_command", "create_intake", "ensure_open_shift"]

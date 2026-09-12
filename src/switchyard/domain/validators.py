@@ -55,36 +55,65 @@ def require_integer(raw: Any, field_name: str, minimum: int, maximum: int) -> in
     if isinstance(raw, bool) or not isinstance(raw, int):
         raise ValidationError(
             f"{field_name} must be an integer",
-            **{field_name: [f"must be between {minimum} and {maximum}"]},
+            fields={field_name: [f"must be between {minimum} and {maximum}"]},
         )
     if raw < minimum or raw > maximum:
         raise ValidationError(
             f"{field_name} is out of range",
-            **{field_name: [f"must be between {minimum} and {maximum}"]},
+            fields={field_name: [f"must be between {minimum} and {maximum}"]},
         )
     return raw
 
 
 def parse_car_input(raw: dict[str, Any]) -> CarInput:
-    code = require_text(raw.get("code"), "code").upper()
-    if not is_car_code(code):
-        raise ValidationError("invalid car code", **{"code": ["expected format C-PREFIX-NUMBER"]})
-    kind_text = require_text(raw.get("kind"), "kind").upper()
-    if not kind_known(kind_text):
-        raise ValidationError("unknown car kind", **{"kind": ["BOX, HOPPER, FLAT, TANK, or REEFER"]})
-    destination_text = require_text(raw.get("destination"), "destination").upper()
-    if not destination_known(destination_text):
-        raise ValidationError("unknown destination", **{"destination": ["N4, E7, S2, or W9"]})
-    length = require_integer(raw.get("length_m"), "length_m", MIN_CAR_LENGTH_M, MAX_CAR_LENGTH_M)
-    danger = require_text(raw.get("danger_class"), "danger_class", 8).upper()
-    if not hazard_known(danger):
-        raise ValidationError("unknown hazard class", **{"danger_class": ["NONE, D1, or D2"]})
+    fields: dict[str, list[str]] = {}
+    code = None
+    code_raw = raw.get("code")
+    if not isinstance(code_raw, str) or not code_raw.strip():
+        fields["code"] = ["is required"]
+    else:
+        code = code_raw.strip().upper()
+        if not is_car_code(code):
+            fields["code"] = ["expected format C-PREFIX-NUMBER"]
+    kind = None
+    kind_raw = raw.get("kind")
+    if not isinstance(kind_raw, str) or not kind_raw.strip():
+        fields["kind"] = ["is required"]
+    else:
+        kind = kind_raw.strip().upper()
+        if not kind_known(kind):
+            fields["kind"] = ["BOX, HOPPER, FLAT, TANK, or REEFER"]
+    destination = None
+    destination_raw = raw.get("destination")
+    if not isinstance(destination_raw, str) or not destination_raw.strip():
+        fields["destination"] = ["is required"]
+    else:
+        destination = destination_raw.strip().upper()
+        if not destination_known(destination):
+            fields["destination"] = ["N4, E7, S2, or W9"]
+    length = None
+    try:
+        length = require_integer(raw.get("length_m"), "length_m", MIN_CAR_LENGTH_M, MAX_CAR_LENGTH_M)
+    except ValidationError as exc:
+        fields.update(exc.fields)
+    danger = None
+    danger_raw = raw.get("danger_class")
+    if danger_raw is None or (isinstance(danger_raw, str) and not danger_raw.strip()):
+        fields["danger_class"] = ["is required"]
+    elif not isinstance(danger_raw, str):
+        fields["danger_class"] = ["NONE, D1, or D2"]
+    else:
+        danger = danger_raw.strip().upper()
+        if not hazard_known(danger):
+            fields["danger_class"] = ["NONE, D1, or D2"]
     loaded = require_boolean(raw.get("loaded"), "loaded", False)
     note = str(raw.get("note") or "").strip()[:200]
+    if fields:
+        raise ValidationError("invalid car manifest entry", fields=fields)
     return CarInput(
         code=code,
-        kind=kind_text,
-        destination=destination_text,
+        kind=kind,
+        destination=destination,
         loaded=loaded,
         length_m=length,
         danger_class=danger,

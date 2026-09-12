@@ -51,6 +51,38 @@ and duplicate codes, then applies destination affinity, hazard rating, and
 capacity rules. A fully classified train is persisted and every placed car
 becomes available for outbound planning.
 
+#### Batch intake for peak arrivals
+
+Entry: `POST /api/intake-batches`, `GET /api/intake-batches/{code}`
+
+During morning peak several inbound trains arrive together. Instead of calling
+the single-train endpoint repeatedly, the dispatcher points the batch endpoint
+at a local JSON file (`{"source_path": "/path/to/batch.json"}`) or submits the
+document inline (`{"batch": {...}}`). The file has a batch code, optional
+`received_at`/`note`, and a list of train objects shaped exactly like the
+single-create body.
+
+The batch command first validates the whole document structure, then every
+per-train and per-car rule (destinations, hazard classes, lengths, the
+per-train 20-car limit), then car/train duplicates inside the batch (including
+a car code repeated across different trains), and finally conflicts against
+the persisted yard (batch already imported, identical content already
+imported, train code already present, car code already present). Results are
+returned per train and per car with stable locators such as
+`trains[1].cars[2].length_m`. Any failure rejects the entire batch with a
+422 (validation) or 409 (yard conflict) and writes nothing: no half-batch
+trains, cars, events, or provenance records are ever persisted.
+
+Only an entirely acceptable batch is committed, in one atomic commit. Each
+train produces the same `IntakeTrain` (state `OPEN`) and `FreightCar` records
+(state `RECEIVED`, location `INTAKE`) and one `TRAIN_RECEIVED` event as the
+single-create endpoint would, plus a trailing `BATCH_IMPORTED` event carrying
+the source path, byte size, and SHA-256 of the canonical content. An
+`IntakeBatchRecord` stores the batch provenance (source file, hash, train and
+car codes, event sequences) for later troubleshooting, and every imported
+intake carries its `batch_code`. Re-importing the same file is rejected, even
+under a new batch code, via the content hash.
+
 ### 2. Plan an outbound pull sequence
 
 Entry: `POST /api/outbound-trains`, `POST /api/outbound-trains/{code}/sequencer`
@@ -127,6 +159,8 @@ workspace snapshot and never mutate it.
 - `POST /api/shifts`: open a shift.
 - `POST /api/intake-trains`: create an inbound train.
 - `POST /api/intake-trains/{code}/classify`: place cars on standing tracks.
+- `POST /api/intake-batches`: atomically import several inbound trains from a local file.
+- `GET /api/intake-batches/{code}`: return batch provenance, trains, cars, and events.
 - `POST /api/outbound-trains`: create an outbound train.
 - `POST /api/outbound-trains/{code}/sequencer`: create a pull run.
 - `POST /api/pull-runs/{code}/advance`: execute the next pull actions.

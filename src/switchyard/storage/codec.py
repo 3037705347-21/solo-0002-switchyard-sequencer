@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from ..domain.batch import IntakeBatchRecord
 from ..domain.car import FreightCar
 from ..domain.intake import IntakeTrain
 from ..domain.outbound import OutboundTrain
@@ -26,6 +27,7 @@ def encode_workspace(workspace: Any) -> dict[str, Any]:
         "shifts": [shift.to_dict() for shift in workspace.shifts.values()],
         "events": [event.to_dict() for event in workspace.events],
         "closure_snapshots": workspace.closure_snapshots,
+        "batch_intakes": [batch.to_dict() for batch in workspace.batch_intakes.values()],
     }
 
 
@@ -40,6 +42,10 @@ def decode_workspace(raw: dict[str, Any]) -> Any:
     runs = {str(item["code"]): PullRun.from_dict(item) for item in raw.get("pull_runs", [])}
     shifts = {str(item["code"]): YardShift.from_dict(item) for item in raw.get("shifts", [])}
     events = [YardEvent.from_dict(item) for item in raw.get("events", [])]
+    batch_intakes = {
+        str(item["code"]): IntakeBatchRecord.from_dict(item)
+        for item in raw.get("batch_intakes", [])
+    }
     workspace = YardWorkspace(
         tracks=tracks,
         buffer_bays=bays,
@@ -49,6 +55,7 @@ def decode_workspace(raw: dict[str, Any]) -> Any:
         runs=runs,
         shifts=shifts,
         events=events,
+        batch_intakes=batch_intakes,
     )
     workspace.schema_version = int(raw.get("schema_version", workspace.schema_version))
     workspace.version = int(raw.get("version", 1))

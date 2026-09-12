@@ -7,6 +7,7 @@ from typing import Any, Callable
 
 from ..domain.errors import DomainError, NotFoundError
 from ..service import (
+    batch_service,
     closure_service,
     intake_service,
     outbound_service,
@@ -45,6 +46,8 @@ class Router:
             Route("POST", r"/api/shifts/(?P<code>[^/]+)/close", self._close_shift),
             Route("POST", r"/api/intake-trains", self._create_intake),
             Route("POST", r"/api/intake-trains/(?P<code>[^/]+)/classify", self._classify),
+            Route("POST", r"/api/intake-batches", self._import_batch),
+            Route("GET", r"/api/intake-batches/(?P<code>[^/]+)", self._batch_view),
             Route("POST", r"/api/outbound-trains", self._create_outbound),
             Route("POST", r"/api/outbound-trains/(?P<code>[^/]+)/sequencer", self._sequence),
             Route("POST", r"/api/outbound-trains/(?P<code>[^/]+)/depart", self._depart),
@@ -80,6 +83,12 @@ class Router:
 
     def _classify(self, body: Any, code: str) -> dict[str, Any]:
         return intake_service.classify_intake_command(self.app, code)
+
+    def _import_batch(self, body: Any) -> dict[str, Any]:
+        return batch_service.import_intake_batch(self.app, body)
+
+    def _batch_view(self, body: Any, code: str) -> dict[str, Any]:
+        return batch_service.get_intake_batch(self.app, code)
 
     def _create_outbound(self, body: Any) -> dict[str, Any]:
         return outbound_service.create_outbound(self.app, body)

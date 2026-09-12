@@ -17,6 +17,7 @@ class IntakeTrain:
     unplaced: list[str] = field(default_factory=list)
     placed_at: str | None = None
     note: str = ""
+    batch_code: str | None = None
 
     def to_dict(self) -> dict[str, object]:
         return {
@@ -28,6 +29,7 @@ class IntakeTrain:
             "unplaced": list(self.unplaced),
             "placed_at": self.placed_at,
             "note": self.note,
+            "batch_code": self.batch_code,
         }
 
     @classmethod
@@ -41,6 +43,7 @@ class IntakeTrain:
             unplaced=[str(item) for item in raw.get("unplaced", [])],
             placed_at=None if raw.get("placed_at") is None else str(raw["placed_at"]),
             note=str(raw.get("note", "")),
+            batch_code=None if raw.get("batch_code") is None else str(raw["batch_code"]),
         )
 
     def is_terminal(self) -> bool:
