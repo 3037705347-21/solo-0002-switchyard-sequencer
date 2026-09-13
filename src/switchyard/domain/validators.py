@@ -6,7 +6,7 @@ import re
 from typing import Any
 
 from .car import CarInput, FreightCar
-from .enums import CarKind
+from .enums import CarKind, TrackState
 from .errors import ValidationError
 from .intake import IntakeTrain
 from .outbound import OutboundTrain
@@ -182,21 +182,67 @@ def parse_advance_steps(raw: Any) -> int:
     return require_integer(steps, "steps", 1, 200)
 
 
-def parse_transfer_code(raw: Any) -> str:
+AUTO_TRANSFER = "AUTO"
+
+
+def parse_transfer_code(raw: Any) -> str | None:
+    """Parse an optional transfer line choice.
+
+    Missing/empty value or ``AUTO`` lets the scheduler choose the line by the
+    deterministic best-fit rule. An explicit code is admitted against that
+    single line (preserving single-transfer-line behavior).
+    """
     body = require_object(raw, "payload")
-    transfer = require_text(body.get("transfer_code"), "transfer_code").upper()
+    transfer = body.get("transfer_code")
+    if transfer is None or (isinstance(transfer, str) and not transfer.strip()):
+        return None
+    if not isinstance(transfer, str):
+        raise ValidationError(
+            "invalid transfer code", **{"transfer_code": ["expected short bay code or AUTO"]}
+        )
+    transfer = transfer.strip().upper()
+    if transfer == AUTO_TRANSFER:
+        return None
     if not re.fullmatch(r"[A-Z][A-Z0-9]{0,8}", transfer):
-        raise ValidationError("invalid transfer code", **{"transfer_code": ["expected short bay code"]})
+        raise ValidationError("invalid transfer code", **{"transfer_code": ["expected short bay code or AUTO"]})
     return transfer
 
 
+def build_transfer_registration(raw: Any) -> tuple[str, int]:
+    body = require_object(raw, "payload")
+    code = require_text(body.get("code"), "code", 12).upper()
+    if not re.fullmatch(r"[A-Z][A-Z0-9]{0,8}", code):
+        raise ValidationError(
+            "invalid transfer line code", **{"code": ["expected 1-9 letters/digits starting with a letter"]}
+        )
+    capacity = body.get("capacity_cars", 10)
+    if capacity is None:
+        capacity = 10
+    capacity = require_integer(capacity, "capacity_cars", 1, 100)
+    return code, capacity
+
+
+def parse_transfer_state(raw: Any) -> str:
+    body = require_object(raw, "payload")
+    state = require_text(body.get("state"), "state", 12).upper()
+    if state not in {item.value for item in TrackState}:
+        raise ValidationError(
+            "invalid transfer line state",
+            **{"state": ["OPERATIONAL, RESTRICTED, or MAINTENANCE"]},
+        )
+    return state
+
+
 __all__ = [
+    "AUTO_TRANSFER",
     "build_intake_payload",
     "build_outbound_payload",
     "build_shift_payload",
+    "build_transfer_registration",
     "parse_advance_steps",
     "parse_car_input",
     "parse_transfer_code",
+    "parse_transfer_state",
     "require_integer",
     "require_object",
     "require_text",

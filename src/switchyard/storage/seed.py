@@ -6,6 +6,8 @@ from ..domain.enums import TrackPurpose, TrackState
 from ..domain.track import BufferBay, StandingTrack
 from .workspace import YardWorkspace
 
+SEED_REGISTERED_AT = "2026-01-01T00:00:00Z"
+
 
 def seed_tracks() -> list[StandingTrack]:
     return [
@@ -20,7 +22,15 @@ def seed_tracks() -> list[StandingTrack]:
 
 
 def seed_bays() -> list[BufferBay]:
-    return [BufferBay("X1", 10)]
+    return [
+        BufferBay(
+            "X1",
+            10,
+            state=TrackState.OPERATIONAL,
+            registered_order=1,
+            registered_at=SEED_REGISTERED_AT,
+        )
+    ]
 
 
 def build_seed_workspace() -> YardWorkspace:
@@ -32,4 +42,4 @@ def build_seed_workspace() -> YardWorkspace:
     return workspace
 
 
-__all__ = ["build_seed_workspace", "seed_bays", "seed_tracks"]
+__all__ = ["SEED_REGISTERED_AT", "build_seed_workspace", "seed_bays", "seed_tracks"]

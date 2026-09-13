@@ -9,6 +9,7 @@ from ..domain.enums import EventKind
 from ..domain.pull import YardEvent
 from ..domain.timeutil import now_iso
 from ..domain.track import BufferBay, StandingTrack
+from ..domain.transfer import TransferReservation
 
 SCHEMA_VERSION = 1
 
@@ -20,6 +21,7 @@ class YardWorkspace:
     next_event_sequence: int = 1
     tracks: dict[str, StandingTrack] = field(default_factory=dict)
     buffer_bays: dict[str, BufferBay] = field(default_factory=dict)
+    transfer_reservations: dict[str, TransferReservation] = field(default_factory=dict)
     cars: dict[str, Any] = field(default_factory=dict)
     intakes: dict[str, Any] = field(default_factory=dict)
     outbounds: dict[str, Any] = field(default_factory=dict)

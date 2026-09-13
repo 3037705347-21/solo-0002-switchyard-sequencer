@@ -72,9 +72,19 @@ class BufferBay:
     code: str
     capacity_cars: int
     stack: list[str] = field(default_factory=list)
+    state: TrackState = TrackState.OPERATIONAL
+    registered_order: int = 0
+    registered_at: str = ""
 
     def to_dict(self) -> dict[str, object]:
-        return {"code": self.code, "capacity_cars": self.capacity_cars, "stack": list(self.stack)}
+        return {
+            "code": self.code,
+            "capacity_cars": self.capacity_cars,
+            "stack": list(self.stack),
+            "state": str(self.state),
+            "registered_order": self.registered_order,
+            "registered_at": self.registered_at,
+        }
 
     @classmethod
     def from_dict(cls, raw: dict[str, object]) -> "BufferBay":
@@ -82,6 +92,9 @@ class BufferBay:
             code=str(raw["code"]),
             capacity_cars=int(raw["capacity_cars"]),
             stack=[str(item) for item in raw.get("stack", [])],
+            state=TrackState.parse(str(raw.get("state", TrackState.OPERATIONAL.value))),
+            registered_order=int(raw.get("registered_order", 0)),
+            registered_at=str(raw.get("registered_at", "")),
         )
 
     def top_code(self) -> str | None:
@@ -89,6 +102,9 @@ class BufferBay:
 
     def remaining(self) -> int:
         return max(0, self.capacity_cars - len(self.stack))
+
+    def can_operate(self) -> bool:
+        return self.state == TrackState.OPERATIONAL
 
 
 __all__ = ["BufferBay", "StandingTrack"]

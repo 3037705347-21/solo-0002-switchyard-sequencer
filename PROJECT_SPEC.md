@@ -26,8 +26,12 @@ state as JSON files under a configurable data directory.
   state, length, and hazard class.
 - `StandingTrack`: a capacity-limited track with a purpose, operating state,
   destination affinity, hazard rating, and a LIFO car stack.
-- `BufferBay`: a short transfer bay used to park non-target cars while a target
-  car is pulled from deeper in a track stack.
+- `BufferBay`: a transfer line (LIFO lead) used to park non-target cars while
+  a target car is pulled from deeper in a track stack. Multiple transfer
+  lines may be registered, each with its own capacity and operating state.
+- `TransferReservation`: the traceable capacity hold of one pull run on one
+  transfer line, with planned peak slots, observed physical peak, and a
+  holding/released lifecycle.
 - `IntakeTrain`: an inbound train with a consist of newly received cars and an
   open, partial, or classified state.
 - `OutboundTrain`: a train destined for a route code with a planned car
@@ -58,8 +62,15 @@ Entry: `POST /api/outbound-trains`, `POST /api/outbound-trains/{code}/sequencer`
 The planner creates an outbound train for a destination with an explicit car
 sequence. The sequencer checks that each car is standing, unreserved, and on a
 compatible track, then simulates the LIFO constraint of every source stack. It
-generates a `PullRun` with buffer, pull, and return actions, reserves the
-planned cars, and moves the outbound train into a planned state.
+registers (or selects among) transfer lines and schedules the ticket on a
+single line whose free slots cover the ticket's peak concurrent demand. The
+feasible-line choice uses a stable best-fit ordering (least slack, committed
+load, physical load, capacity, registration order, code), never name or
+iteration order alone. It generates a `PullRun` with buffer, pull, and return
+actions, reserves the planned cars and the transfer-line slots, and moves the
+outbound train into a planned state. Insufficient line capacity is rejected in
+the planning stage with a per-line reason: existing occupancy, single-line
+limit, or line unavailable.
 
 ### 3. Execute pull actions and depart the outbound train
 
@@ -92,9 +103,16 @@ view for verification.
   is allowed only before classification.
 - Outbound state moves from `draft` to `planned` when a pull run is created,
   then to `ready` when assembly completes, then to `departed`.
-- Pull runs move from `queued` to `running`, then `completed` or `failed`.
+- Pull runs move from `queued` to `running`, then `completed`, `failed`, or
+  `cancelled` (only a queued run may be cancelled; the ticket returns to
+  draft and reserved cars go back to standing).
 - Car state moves from `received` to `standing`, `reserved`, `assembled`, and
   `departed`.
+- A pull ticket is admitted to one transfer line whose available slots cover
+  its peak concurrent demand; queued runs reserve their peak, running runs
+  reserve `max(physical cars on line, remaining peak)`, and terminal runs
+  release. Holds are recomputed from persisted runs and live car positions so
+  partial execution, returns, cancellation, and restart stay consistent.
 - Destination-sorting tracks accept only cars whose destination matches the
   track affinity.
 - Hazardous cars require a hazard-rated track.
@@ -128,9 +146,17 @@ workspace snapshot and never mutate it.
 - `POST /api/intake-trains`: create an inbound train.
 - `POST /api/intake-trains/{code}/classify`: place cars on standing tracks.
 - `POST /api/outbound-trains`: create an outbound train.
-- `POST /api/outbound-trains/{code}/sequencer`: create a pull run.
+- `POST /api/outbound-trains/{code}/sequencer`: create a pull run, scheduling
+  transfer-line capacity automatically (omit `transfer_code` or send `AUTO`)
+  or against an explicit transfer line.
 - `POST /api/pull-runs/{code}/advance`: execute the next pull actions.
+- `POST /api/pull-runs/{code}/cancel`: cancel a queued pull run and release
+  its cars and transfer-line hold.
 - `POST /api/outbound-trains/{code}/depart`: mark an assembled train departed.
+- `GET /api/transfer-lines`: list registered transfer lines with physical,
+  committed, and available capacity and the runs holding each line.
+- `POST /api/transfer-lines`: register a transfer line with a car capacity.
+- `POST /api/transfer-lines/{code}/state`: change a line's operating state.
 - `POST /api/shifts/{code}/close`: create a closure snapshot.
 - `GET /api/yard`: return the full yard view.
 - `GET /api/shifts/{code}`: return shift details and recent events.

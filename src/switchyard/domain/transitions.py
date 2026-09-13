@@ -68,10 +68,15 @@ def transition_outbound(train: OutboundTrain, target: OutboundState, reason: str
 
 def transition_run(run: PullRun, target: RunState, reason: str | None = None) -> None:
     allowed = {
-        RunState.QUEUED.value: {RunState.RUNNING.value, RunState.FAILED.value},
+        RunState.QUEUED.value: {
+            RunState.RUNNING.value,
+            RunState.FAILED.value,
+            RunState.CANCELLED.value,
+        },
         RunState.RUNNING.value: {RunState.COMPLETED.value, RunState.FAILED.value},
         RunState.COMPLETED.value: set(),
         RunState.FAILED.value: set(),
+        RunState.CANCELLED.value: set(),
     }
     _check(str(run.state), str(target), allowed, "pull run", reason)
     run.state = target

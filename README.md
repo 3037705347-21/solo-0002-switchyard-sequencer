@@ -28,6 +28,7 @@ PYTHONPATH=src python3 checks/wf_intake_classify.py
 PYTHONPATH=src python3 checks/wf_outbound_sequence.py
 PYTHONPATH=src python3 checks/wf_pull_depart.py
 PYTHONPATH=src python3 checks/wf_close_shift.py
+PYTHONPATH=src python3 checks/wf_transfer_capacity.py
 ```
 
 Each check starts an isolated server on a free port with a temporary data
@@ -71,3 +72,35 @@ GET  /api/yard
 
 Request and response examples are embedded in the project specification and in
 the workflow checks.
+
+## Transfer line capacity scheduling
+
+The yard may register more than one transfer line (the seed yard ships with
+`X1`). Lines are registered with a car-slot capacity and expose a live
+capacity view:
+
+```text
+GET  /api/transfer-lines
+POST /api/transfer-lines                       {"code": "X2", "capacity_cars": 2}
+POST /api/transfer-lines/X2/state              {"state": "MAINTENANCE"}
+```
+
+`POST /api/outbound-trains/{code}/sequencer` accepts either no
+`transfer_code`, `"AUTO"`, or an explicit line code. With AUTO the scheduler
+places the whole ticket on one line whose currently free slots cover its peak
+concurrent demand (the deepest blocker stack). Feasible lines are ranked by a
+stable best-fit key: least slack after placement, then highest committed load,
+highest physical load, smallest capacity, stable registration order, and
+finally code — never by name or call order. Capacity is sold per active plan:
+queued runs commit their peak slots, running runs commit
+`max(physical cars on the line, remaining peak)`, and completed/cancelled runs
+release them. Holds are derived from persisted runs and bay positions on every
+plan, advance, cancellation, and restart, so partial execution, blocker
+returns, cancellation, and process restart all recompute occupancy consistent
+with the vehicles on the ground; released reservations remain on file as an
+audit trail. A planning rejection (`TRANSFER_CAPACITY`, HTTP 422) classifies
+each line as `existing_occupancy`, `single_line_limit`, or `line_unavailable`.
+A queued run can be cancelled with `POST /api/pull-runs/{code}/cancel`;
+running runs must be advanced to completion because their cars are physically
+split between track and transfer line. Single-transfer-line workspaces keep
+their old behavior (AUTO simply resolves to the only registered line).

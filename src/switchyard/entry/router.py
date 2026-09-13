@@ -13,6 +13,7 @@ from ..service import (
     query_service,
     run_service,
     shift_service,
+    transfer_service,
 )
 from ..service.context import YardApplication
 
@@ -49,6 +50,10 @@ class Router:
             Route("POST", r"/api/outbound-trains/(?P<code>[^/]+)/sequencer", self._sequence),
             Route("POST", r"/api/outbound-trains/(?P<code>[^/]+)/depart", self._depart),
             Route("POST", r"/api/pull-runs/(?P<code>[^/]+)/advance", self._advance),
+            Route("POST", r"/api/pull-runs/(?P<code>[^/]+)/cancel", self._cancel_run),
+            Route("GET", r"/api/transfer-lines", self._list_transfers),
+            Route("POST", r"/api/transfer-lines", self._register_transfer),
+            Route("POST", r"/api/transfer-lines/(?P<code>[^/]+)/state", self._set_transfer_state),
         ]
 
     def dispatch(self, method: str, path: str, body: Any) -> tuple[int, dict[str, Any]]:
@@ -92,6 +97,18 @@ class Router:
 
     def _advance(self, body: Any, code: str) -> dict[str, Any]:
         return run_service.advance_run(self.app, code, body)
+
+    def _cancel_run(self, body: Any, code: str) -> dict[str, Any]:
+        return run_service.cancel_run(self.app, code)
+
+    def _list_transfers(self, body: Any) -> dict[str, Any]:
+        return transfer_service.list_transfer_lines(self.app)
+
+    def _register_transfer(self, body: Any) -> dict[str, Any]:
+        return transfer_service.register_transfer_line(self.app, body)
+
+    def _set_transfer_state(self, body: Any, code: str) -> dict[str, Any]:
+        return transfer_service.set_transfer_line_state(self.app, code, body)
 
 
 __all__ = ["Route", "Router"]

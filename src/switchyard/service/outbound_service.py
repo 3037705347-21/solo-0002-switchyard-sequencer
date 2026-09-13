@@ -7,8 +7,14 @@ from typing import Any
 from ..domain.enums import CarState, EventKind, OutboundState
 from ..domain.errors import ConflictError, NotFoundError, ResourceBusyError, ValidationError
 from ..domain.outbound import OutboundTrain
-from ..domain.sequencer import plan_pull_run
+from ..domain.sequencer import derive_plan_shape, plan_pull_run
 from ..domain.timeutil import now_iso
+from ..domain.transfer import (
+    TransferCapacityError,
+    reconcile_transfer_occupancy,
+    record_reservation,
+    select_transfer_line,
+)
 from ..domain.validators import build_outbound_payload, parse_transfer_code
 from .context import YardApplication
 
@@ -81,8 +87,18 @@ def create_outbound(app: YardApplication, payload: Any) -> dict[str, Any]:
     return train.to_dict()
 
 
+def _next_run_code(workspace: Any, outbound_code: str) -> str:
+    base = f"RUN-{outbound_code}"
+    if base not in workspace.runs:
+        return base
+    attempt = 2
+    while f"{base}-{attempt}" in workspace.runs:
+        attempt += 1
+    return f"{base}-{attempt}"
+
+
 def sequence_outbound(app: YardApplication, outbound_code: str, payload: Any) -> dict[str, Any]:
-    transfer_code = parse_transfer_code(payload)
+    preferred_code = parse_transfer_code(payload)
     workspace = app.load()
     shift_code = _ensure_shift_open(workspace)
     outbound = workspace.outbounds.get(outbound_code)
@@ -93,28 +109,81 @@ def sequence_outbound(app: YardApplication, outbound_code: str, payload: Any) ->
             "outbound train already has a plan",
             **{"outbound_code": [f"current state is {outbound.state.value}"]},
         )
-    if transfer_code not in workspace.buffer_bays:
-        raise ValidationError("unknown transfer bay", **{"transfer_code": ["not found"]})
-    run_code = f"RUN-{outbound.code}"
-    if run_code in workspace.runs:
-        raise ConflictError("pull run already exists", code=run_code)
+    if preferred_code is not None and preferred_code not in workspace.buffer_bays:
+        raise NotFoundError("transfer line", preferred_code)
+    # Recompute committed holds from persisted runs first so planning always
+    # works against positions and plans already on record (covers restart).
+    reconcile_transfer_occupancy(workspace)
+    # Car-level validation first (missing car, blocker reserved elsewhere);
+    # those failures are independent of transfer-line capacity.
+    shape = derive_plan_shape(outbound, workspace.cars, workspace.tracks)
+    required = shape.peak_bay_occupancy
+    chosen_code, chosen, evaluations = select_transfer_line(
+        required,
+        workspace.buffer_bays,
+        workspace.runs,
+        preferred_code=preferred_code,
+        reservations=workspace.transfer_reservations,
+    )
+    if chosen_code is None:
+        raise TransferCapacityError(required, evaluations, preferred_code)
+    run_code = _next_run_code(workspace, outbound.code)
     run = plan_pull_run(
         run_code,
         outbound,
         workspace.cars,
         workspace.tracks,
         workspace.buffer_bays,
-        transfer_code,
+        chosen_code,
     )
     workspace.runs[run.code] = run
+    record_reservation(workspace, run, required, chosen.slack)
     event = workspace.record_event(
         shift_code,
         EventKind.PULL_PLANNED,
         f"pull run {run.code} planned for {outbound.code}",
-        {"steps": len(run.steps), "transfer_code": transfer_code},
+        {
+            "steps": len(run.steps),
+            "transfer_code": chosen_code,
+            "required_slots": required,
+            "slack_slots": chosen.slack,
+            "selection": "requested" if preferred_code is not None else "best_fit",
+            "evaluated": [
+                {
+                    "code": item.code,
+                    "feasible": item.feasible,
+                    "reason": item.reason,
+                    "available_cars": item.available_cars,
+                }
+                for item in evaluations
+            ],
+        },
     )
     app.commit(workspace, event)
-    return {"pull_run": run.to_dict(), "outbound": outbound.to_dict()}
+    return {
+        "pull_run": run.to_dict(),
+        "outbound": outbound.to_dict(),
+        "transfer": {
+            "code": chosen_code,
+            "required_slots": required,
+            "slack_slots": chosen.slack,
+            "available_cars": chosen.available_cars,
+            "capacity_cars": chosen.capacity_cars,
+            "selection": "requested" if preferred_code is not None else "best_fit",
+            "evaluations": [
+                {
+                    "code": item.code,
+                    "feasible": item.feasible,
+                    "reason": item.reason,
+                    "capacity_cars": item.capacity_cars,
+                    "physical_cars": item.physical_cars,
+                    "committed_cars": item.committed_cars,
+                    "available_cars": item.available_cars,
+                }
+                for item in evaluations
+            ],
+        },
+    }
 
 
 __all__ = ["create_outbound", "sequence_outbound"]

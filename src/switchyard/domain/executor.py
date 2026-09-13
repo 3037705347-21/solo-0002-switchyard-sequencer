@@ -48,6 +48,8 @@ def _execute_buffer(workspace: YardWorkspace, run: PullRun, step: MoveStep, car:
         raise StateTransitionError("car", str(car.state), "BUFFERED", "only standing cars can be buffered")
     _source_top_matches(workspace, step.source_code, step.car_code, "buffer")
     bay = workspace.buffer_bays[step.target_code]
+    if not bay.can_operate():
+        raise ResourceBusyError(f"transfer line {bay.code} is {bay.state.value.lower()}")
     if bay.remaining() <= 0:
         raise ResourceBusyError(f"transfer bay {bay.code} has no free capacity")
     source = workspace.tracks[step.source_code]
