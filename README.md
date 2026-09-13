@@ -29,6 +29,7 @@ PYTHONPATH=src python3 checks/wf_outbound_sequence.py
 PYTHONPATH=src python3 checks/wf_pull_depart.py
 PYTHONPATH=src python3 checks/wf_close_shift.py
 PYTHONPATH=src python3 checks/wf_transfer_capacity.py
+PYTHONPATH=src python3 checks/wf_transfer_partial_hold.py
 ```
 
 Each check starts an isolated server on a free port with a temporary data
@@ -91,16 +92,20 @@ places the whole ticket on one line whose currently free slots cover its peak
 concurrent demand (the deepest blocker stack). Feasible lines are ranked by a
 stable best-fit key: least slack after placement, then highest committed load,
 highest physical load, smallest capacity, stable registration order, and
-finally code — never by name or call order. Capacity is sold per active plan:
-queued runs commit their peak slots, running runs commit
-`max(physical cars on the line, remaining peak)`, and completed/cancelled runs
-release them. Holds are derived from persisted runs and bay positions on every
-plan, advance, cancellation, and restart, so partial execution, blocker
-returns, cancellation, and process restart all recompute occupancy consistent
-with the vehicles on the ground; released reservations remain on file as an
-audit trail. A planning rejection (`TRANSFER_CAPACITY`, HTTP 422) classifies
-each line as `existing_occupancy`, `single_line_limit`, or `line_unavailable`.
-A queued run can be cancelled with `POST /api/pull-runs/{code}/cancel`;
-running runs must be advanced to completion because their cars are physically
-split between track and transfer line. Single-transfer-line workspaces keep
-their old behavior (AUTO simply resolves to the only registered line).
+finally code — never by name or call order.
+
+Capacity is sold per active plan. Queued runs commit their peak slots; a
+running run commits the full peak reached when its remaining steps are replayed
+from the cars physically on the line right now (so a peak-2 ticket that has
+buffered only one car still holds both slots until a RETURN frees one);
+completed/cancelled runs release. Holds are derived from persisted runs and
+bay positions on every plan, advance, cancellation, and restart, so partial
+execution, blocker returns, cancellation, and process restart all recompute
+occupancy consistent with the vehicles on the ground; released reservations
+remain on file as an audit trail. A planning rejection (`TRANSFER_CAPACITY`,
+HTTP 422) classifies each line as `existing_occupancy`, `single_line_limit`, or
+`line_unavailable`. A queued run can be cancelled with
+`POST /api/pull-runs/{code}/cancel`; running runs must be advanced to
+completion because their cars are physically split between track and transfer
+line. Single-transfer-line workspaces keep their old behavior (AUTO simply
+resolves to the only registered line).

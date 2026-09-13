@@ -110,9 +110,11 @@ view for verification.
   `departed`.
 - A pull ticket is admitted to one transfer line whose available slots cover
   its peak concurrent demand; queued runs reserve their peak, running runs
-  reserve `max(physical cars on line, remaining peak)`, and terminal runs
-  release. Holds are recomputed from persisted runs and live car positions so
-  partial execution, returns, cancellation, and restart stay consistent.
+  reserve the full peak reached by replaying their remaining steps from the
+  cars physically on the line (a peak-2 ticket keeps holding 2 after its first
+  BUFFER), and terminal runs release. Holds are recomputed from persisted runs
+  and live car positions so partial execution, returns, cancellation, and
+  restart stay consistent.
 - Destination-sorting tracks accept only cars whose destination matches the
   track affinity.
 - Hazardous cars require a hazard-rated track.

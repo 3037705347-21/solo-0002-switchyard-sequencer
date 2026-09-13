@@ -175,10 +175,18 @@ def peak_occupancy(steps: list[MoveStep]) -> int:
     return max(0, peak)
 
 
-def remaining_peak_occupancy(run: PullRun) -> int:
-    """Peak *additional* occupancy the run still needs beyond its current cars."""
-    level = 0
-    peak = 0
+def projected_peak_occupancy(run: PullRun, current_level: int) -> int:
+    """Full peak occupancy the run still reaches, replayed from now.
+
+    The remaining steps are replayed starting from ``current_level`` (the
+    cars physically attributable to this run on the line right now), not from
+    zero. A peak-2 ticket that has buffered one car still issues another
+    BUFFER before any RETURN, so its level climbs back to 2 and the run must
+    keep holding 2 slots. Taking only the peak *additional* demand would drop
+    the hold to 1 after the first BUFFER and wrongly admit another plan.
+    """
+    level = max(0, current_level)
+    peak = level
     for step in run.steps[run.current_step :]:
         level += step_delta(step)
         if level > peak:
@@ -207,7 +215,9 @@ def _run_held_slots(run: PullRun, bay: BufferBay) -> tuple[int, int]:
     if run.state == RunState.QUEUED:
         return peak_occupancy(run.steps), 0
     physical = _attributable_cars(run, bay)
-    return max(physical, remaining_peak_occupancy(run)), physical
+    # Replay the remaining steps from the cars physically on the line so the
+    # hold tracks the full peak still ahead, not just the next net delta.
+    return projected_peak_occupancy(run, physical), physical
 
 
 def line_capacities(
@@ -528,11 +538,11 @@ __all__ = [
     "evaluate_lines",
     "line_capacities",
     "peak_occupancy",
+    "projected_peak_occupancy",
     "reconcile_transfer_occupancy",
     "record_reservation",
     "refresh_observed_peaks",
     "release_reservation",
-    "remaining_peak_occupancy",
     "select_transfer_line",
     "step_delta",
 ]
