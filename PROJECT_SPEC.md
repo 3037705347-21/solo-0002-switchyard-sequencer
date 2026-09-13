@@ -59,7 +59,11 @@ The planner creates an outbound train for a destination with an explicit car
 sequence. The sequencer checks that each car is standing, unreserved, and on a
 compatible track, then simulates the LIFO constraint of every source stack. It
 generates a `PullRun` with buffer, pull, and return actions, reserves the
-planned cars, and moves the outbound train into a planned state.
+planned cars, and moves the outbound train into a planned state. While planned,
+one unexecuted car may be safely replaced with another standing, same-destination
+car; the operation revalidates reservations, live track positions, LIFO order,
+and transfer capacity, then replaces only the plan, reservation, and unexecuted
+run steps while retaining executed history.
 
 ### 3. Execute pull actions and depart the outbound train
 
@@ -103,6 +107,9 @@ view for verification.
 - Track spotting cannot exceed car count or total length capacity.
 - A pull plan is valid only when every buffer move targets a standing car that
   is not reserved elsewhere and the transfer bay has enough capacity.
+- Replacing a planned car is allowed only before its pull has executed; it must
+  revalidate the old reservation release, new car location and destination,
+  LIFO feasibility, and live transfer-bay capacity.
 - Closure is derived from the persisted workspace and never mutates car or
   track state.
 
@@ -129,6 +136,7 @@ workspace snapshot and never mutate it.
 - `POST /api/intake-trains/{code}/classify`: place cars on standing tracks.
 - `POST /api/outbound-trains`: create an outbound train.
 - `POST /api/outbound-trains/{code}/sequencer`: create a pull run.
+- `POST /api/outbound-trains/{code}/replace-car`: replace one unexecuted planned car.
 - `POST /api/pull-runs/{code}/advance`: execute the next pull actions.
 - `POST /api/outbound-trains/{code}/depart`: mark an assembled train departed.
 - `POST /api/shifts/{code}/close`: create a closure snapshot.

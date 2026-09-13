@@ -190,12 +190,24 @@ def parse_transfer_code(raw: Any) -> str:
     return transfer
 
 
+def parse_car_replacement(raw: Any) -> tuple[str, str]:
+    body = require_object(raw, "payload")
+    old_code = require_text(body.get("old_car_code"), "old_car_code").upper()
+    if not is_car_code(old_code):
+        raise ValidationError("invalid old car code", **{"old_car_code": ["expected format C-PREFIX-NUMBER"]})
+    new_code = require_text(body.get("new_car_code"), "new_car_code").upper()
+    if not is_car_code(new_code):
+        raise ValidationError("invalid new car code", **{"new_car_code": ["expected format C-PREFIX-NUMBER"]})
+    return old_code, new_code
+
+
 __all__ = [
     "build_intake_payload",
     "build_outbound_payload",
     "build_shift_payload",
     "parse_advance_steps",
     "parse_car_input",
+    "parse_car_replacement",
     "parse_transfer_code",
     "require_integer",
     "require_object",

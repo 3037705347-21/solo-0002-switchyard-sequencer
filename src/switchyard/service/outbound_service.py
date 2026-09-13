@@ -7,9 +7,10 @@ from typing import Any
 from ..domain.enums import CarState, EventKind, OutboundState
 from ..domain.errors import ConflictError, NotFoundError, ResourceBusyError, ValidationError
 from ..domain.outbound import OutboundTrain
+from ..domain.replacer import replace_planned_car
 from ..domain.sequencer import plan_pull_run
 from ..domain.timeutil import now_iso
-from ..domain.validators import build_outbound_payload, parse_transfer_code
+from ..domain.validators import build_outbound_payload, parse_car_replacement, parse_transfer_code
 from .context import YardApplication
 
 
@@ -117,4 +118,48 @@ def sequence_outbound(app: YardApplication, outbound_code: str, payload: Any) ->
     return {"pull_run": run.to_dict(), "outbound": outbound.to_dict()}
 
 
-__all__ = ["create_outbound", "sequence_outbound"]
+def replace_outbound_car(app: YardApplication, outbound_code: str, payload: Any) -> dict[str, Any]:
+    old_code, new_code = parse_car_replacement(payload)
+    workspace = app.load()
+    shift_code = _ensure_shift_open(workspace)
+    outbound = workspace.outbounds.get(outbound_code)
+    if outbound is None:
+        raise NotFoundError("outbound train", outbound_code)
+    run_code = f"RUN-{outbound.code}"
+    run = workspace.runs.get(run_code)
+    if run is None:
+        raise NotFoundError("pull run", run_code)
+    result = replace_planned_car(
+        outbound=outbound,
+        run=run,
+        old_code=old_code,
+        new_code=new_code,
+        cars=workspace.cars,
+        tracks=workspace.tracks,
+        buffer_bays=workspace.buffer_bays,
+        active_outbounds=workspace.outbounds,
+    )
+    event = workspace.record_event(
+        shift_code,
+        EventKind.PLANNED_CAR_REPLACED,
+        f"replaced {old_code} with {new_code} in outbound {outbound.code}",
+        {
+            "outbound_code": outbound.code,
+            "run_code": run.code,
+            "old_car_code": old_code,
+            "new_car_code": new_code,
+            "current_step": run.current_step,
+            "suffix_steps": len(result.steps),
+        },
+    )
+    app.commit(workspace, event)
+    return {
+        "pull_run": run.to_dict(),
+        "outbound": outbound.to_dict(),
+        "old_car": result.old_car.to_dict(),
+        "new_car": result.new_car.to_dict(),
+        "replaced_suffix_steps": len(result.steps),
+    }
+
+
+__all__ = ["create_outbound", "replace_outbound_car", "sequence_outbound"]

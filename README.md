@@ -26,6 +26,7 @@ workflow checks exercise the real HTTP API:
 ```bash
 PYTHONPATH=src python3 checks/wf_intake_classify.py
 PYTHONPATH=src python3 checks/wf_outbound_sequence.py
+PYTHONPATH=src python3 checks/wf_replace_car.py
 PYTHONPATH=src python3 checks/wf_pull_depart.py
 PYTHONPATH=src python3 checks/wf_close_shift.py
 ```
@@ -63,6 +64,7 @@ POST /api/intake-trains
 POST /api/intake-trains/INT-01/classify
 POST /api/outbound-trains
 POST /api/outbound-trains/OB-01/sequencer
+POST /api/outbound-trains/OB-01/replace-car
 POST /api/pull-runs/RUN-01/advance
 POST /api/outbound-trains/OB-01/depart
 POST /api/shifts/SHIFT-01/close
