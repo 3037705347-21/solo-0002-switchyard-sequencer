@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from ..domain.enums import CarState, RunState, ShiftState
+from ..domain.enums import CarState, OutboundState, RunState, ShiftState
 
 
 def yard_metrics(workspace: Any) -> dict[str, Any]:
@@ -51,6 +51,20 @@ def yard_metrics(workspace: Any) -> dict[str, Any]:
     ]
     active_runs = [code for code, run in workspace.runs.items() if run.state in {RunState.QUEUED, RunState.RUNNING}]
     open_shifts = [code for code, shift in workspace.shifts.items() if shift.state == ShiftState.OPEN]
+    departed_trains = [
+        {
+            "code": train.code,
+            "destination": train.destination,
+            "departed_at": train.departed_at,
+            "car_count": len(train.assembled_car_codes),
+            "note": train.note,
+            "late_reason": train.late_reason,
+            "confirmed_by": train.confirmed_by,
+        }
+        for train in workspace.outbounds.values()
+        if train.state == OutboundState.DEPARTED
+    ]
+    departed_trains.sort(key=lambda item: (item["departed_at"] or "", item["code"]))
     return {
         "total_cars": len(cars),
         "car_state_counts": {
@@ -67,6 +81,8 @@ def yard_metrics(workspace: Any) -> dict[str, Any]:
         "active_outbounds": sorted(active_outbounds),
         "active_runs": sorted(active_runs),
         "open_shifts": sorted(open_shifts),
+        "departed_train_count": len(departed_trains),
+        "departed_trains": departed_trains,
         "event_count": len(workspace.events),
         "version": workspace.version,
     }

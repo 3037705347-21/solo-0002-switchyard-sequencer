@@ -88,7 +88,7 @@ class Router:
         return outbound_service.sequence_outbound(self.app, code, body)
 
     def _depart(self, body: Any, code: str) -> dict[str, Any]:
-        return run_service.depart_outbound(self.app, code)
+        return run_service.depart_outbound(self.app, code, body)
 
     def _advance(self, body: Any, code: str) -> dict[str, Any]:
         return run_service.advance_run(self.app, code, body)

@@ -9,9 +9,12 @@ from .car import CarInput, FreightCar
 from .enums import CarKind
 from .errors import ValidationError
 from .intake import IntakeTrain
-from .outbound import OutboundTrain
+from .outbound import DepartureDetails, OutboundTrain
 from .rules import (
     MAX_CAR_LENGTH_M,
+    MAX_CONFIRMATION_LEN,
+    MAX_DEPARTURE_NOTE_LEN,
+    MAX_DEPARTURE_REASON_LEN,
     MAX_PLANNED_CARS,
     MAX_TRAIN_CONSIST,
     MIN_CAR_LENGTH_M,
@@ -190,12 +193,60 @@ def parse_transfer_code(raw: Any) -> str:
     return transfer
 
 
+def optional_text(raw: Any, field_name: str, max_length: int) -> str:
+    if raw is None:
+        return ""
+    if not isinstance(raw, str):
+        raise ValidationError(
+            f"{field_name} must be a string",
+            fields={field_name: [f"must be a string of at most {max_length} characters"]},
+        )
+    value = raw.strip()
+    if len(value) > max_length:
+        raise ValidationError(
+            f"{field_name} is too long",
+            fields={field_name: [f"must be at most {max_length} characters"]},
+        )
+    return value
+
+
+def parse_departure_payload(raw: Any) -> DepartureDetails:
+    body = require_object(raw, "payload")
+    departed_raw = body.get("departed_at")
+    departed_at: str | None = None
+    timestamp_hint = "expected a UTC timestamp like 2026-09-08T10:15:00Z"
+    if departed_raw is not None:
+        if not isinstance(departed_raw, str) or not departed_raw.strip():
+            raise ValidationError(
+                "departed_at must be an ISO 8601 timestamp",
+                fields={"departed_at": [timestamp_hint]},
+            )
+        try:
+            departed_at = normalize_iso(departed_raw)
+        except (ValueError, OverflowError) as exc:
+            raise ValidationError(
+                "departed_at is not a valid ISO 8601 timestamp",
+                fields={"departed_at": [timestamp_hint]},
+            ) from exc
+    note = optional_text(body.get("note"), "note", MAX_DEPARTURE_NOTE_LEN)
+    late_reason = optional_text(body.get("late_reason"), "late_reason", MAX_DEPARTURE_REASON_LEN)
+    confirmed_by = optional_text(body.get("confirmed_by"), "confirmed_by", MAX_CONFIRMATION_LEN)
+    return DepartureDetails(
+        departed_at=departed_at,
+        note=note,
+        late_reason=late_reason,
+        confirmed_by=confirmed_by,
+    )
+
+
 __all__ = [
     "build_intake_payload",
     "build_outbound_payload",
     "build_shift_payload",
+    "optional_text",
     "parse_advance_steps",
     "parse_car_input",
+    "parse_departure_payload",
     "parse_transfer_code",
     "require_integer",
     "require_object",

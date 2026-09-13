@@ -8,6 +8,19 @@ from .enums import OutboundState
 
 
 @dataclass(slots=True)
+class DepartureDetails:
+    """Optional dispatcher-supplied registration for a departure."""
+
+    departed_at: str | None = None
+    note: str = ""
+    late_reason: str = ""
+    confirmed_by: str = ""
+
+    def has_field_data(self) -> bool:
+        return bool(self.note or self.late_reason or self.confirmed_by or self.departed_at)
+
+
+@dataclass(slots=True)
 class OutboundTrain:
     code: str
     destination: str
@@ -18,6 +31,8 @@ class OutboundTrain:
     created_at: str = ""
     departed_at: str | None = None
     note: str = ""
+    late_reason: str = ""
+    confirmed_by: str = ""
 
     def to_dict(self) -> dict[str, object]:
         return {
@@ -30,6 +45,8 @@ class OutboundTrain:
             "created_at": self.created_at,
             "departed_at": self.departed_at,
             "note": self.note,
+            "late_reason": self.late_reason,
+            "confirmed_by": self.confirmed_by,
         }
 
     @classmethod
@@ -44,10 +61,20 @@ class OutboundTrain:
             created_at=str(raw.get("created_at", "")),
             departed_at=None if raw.get("departed_at") is None else str(raw["departed_at"]),
             note=str(raw.get("note", "")),
+            late_reason=str(raw.get("late_reason", "")),
+            confirmed_by=str(raw.get("confirmed_by", "")),
         )
 
     def assembly_complete(self) -> bool:
         return self.assembled_car_codes == self.planned_car_codes
 
+    def departure_details(self) -> DepartureDetails:
+        return DepartureDetails(
+            departed_at=self.departed_at,
+            note=self.note,
+            late_reason=self.late_reason,
+            confirmed_by=self.confirmed_by,
+        )
 
-__all__ = ["OutboundTrain"]
+
+__all__ = ["DepartureDetails", "OutboundTrain"]

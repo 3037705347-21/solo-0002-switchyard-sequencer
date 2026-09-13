@@ -71,7 +71,14 @@ the current track top, the buffer state, and the car reservation before
 changing locations. Buffer cars are parked and later returned, planned cars are
 appended to the outbound assembled consist, and the run completes only when the
 assembled sequence matches the planned sequence. The dispatcher can then mark
-the train departed and move its cars into the departed state.
+the train departed and move its cars into the departed state. The depart call
+accepts an optional `departed_at` actual time, `note` site remark,
+`late_reason`, and `confirmed_by` on-site confirmation; omitting them keeps the
+previous behavior of recording the server time with empty remarks. A supplied
+time must parse as ISO 8601, be at or after assembly completion, and stay within
+the server clock-skew allowance. The same departure record is stored on the
+outbound train, copied into the `TRAIN_DEPARTED` event, and surfaced in yard
+metrics and the closure snapshot.
 
 ### 4. Close a shift with a yard balance
 
