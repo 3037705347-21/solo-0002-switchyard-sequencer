@@ -10,8 +10,7 @@ from ..storage.workspace import YardWorkspace
 
 class YardApplication:
     def __init__(self, data_dir: Path | str):
-        self.data_dir = Path(data_dir)
-        self.repository = YardRepository(self.data_dir)
+        self.repository = YardRepository(Path(data_dir))
 
     def load(self) -> YardWorkspace:
         return self.repository.load()
@@ -26,6 +25,10 @@ class YardApplication:
 
     def data_path(self) -> str:
         return self.repository.path_text()
+
+    @property
+    def data_dir(self) -> Path:
+        return self.repository.data_dir
 
 
 __all__ = ["YardApplication"]

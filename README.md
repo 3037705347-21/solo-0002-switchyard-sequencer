@@ -28,10 +28,42 @@ PYTHONPATH=src python3 checks/wf_intake_classify.py
 PYTHONPATH=src python3 checks/wf_outbound_sequence.py
 PYTHONPATH=src python3 checks/wf_pull_depart.py
 PYTHONPATH=src python3 checks/wf_close_shift.py
+PYTHONPATH=src python3 checks/wf_audit_reconciliation.py
 ```
 
 Each check starts an isolated server on a free port with a temporary data
 directory and stops the server before exiting.
+
+## Event audit and reconciliation
+
+The state file and the append-only event journal can both be inspected by
+humans, so the service ships a strictly read-only audit module that answers
+whether the two describe the same yard work. It correlates events by sequence,
+shift, timestamp, and object, and surfaces:
+
+- duplicate events (same sequence appearing more than once),
+- sequence gaps and a state/journal sequence counter mismatch,
+- physical order inversions and timestamp inversions,
+- events present on only one side (`journal_only_event` / `state_only_event`)
+  and field mismatches between paired events,
+- snapshot objects that no journal event accounts for,
+- a trace from every event to the current state of its object and cars,
+  marked `CONSISTENT`, `INCONSISTENT`, or `OBJECT_MISSING`.
+
+Malformed journal lines, unknown event kinds, and events whose object cannot be
+resolved are never silently dropped and never block normal service: they are
+retained as manual review items. The auditor never writes and never appends
+"fix-up" events, so problems cannot be hidden by rewriting the journal.
+
+```bash
+# HTTP: filter the event view by shift, kind, car, or pull run
+GET /api/audit/reconciliation?shift=SHIFT-01&kind=TRAIN_DEPARTED
+GET /api/audit/reconciliation?car=C-N4-31&pull_run=RUN-OB-01
+
+# Stand-alone read-only CLI (exit 2 flags error-level divergence)
+PYTHONPATH=src python3 -m switchyard.entry.audit_cli --data-dir data/run \
+    --kind TRAIN_DEPARTED --issues-only --fail-on-discrepancy
+```
 
 ## Directory structure
 
@@ -39,8 +71,8 @@ directory and stops the server before exiting.
 src/switchyard/domain/    entities, validation, transitions, allocation, sequencing
 src/switchyard/storage/   workspace state, atomic JSON persistence, seed data
 src/switchyard/service/   workflow commands and application context
-src/switchyard/report/    metrics and closure summaries
-src/switchyard/entry/     HTTP server, router, and request handling
+src/switchyard/report/    metrics, closure summaries, event audit/reconciliation
+src/switchyard/entry/     HTTP server, router, audit CLI, and request handling
 checks/                   production workflow checks
 data/                     runtime JSON data (created on first run)
 ```

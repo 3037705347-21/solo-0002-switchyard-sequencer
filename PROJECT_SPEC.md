@@ -115,12 +115,16 @@ view for verification.
   pull sequencing, and domain errors.
 - `storage`: workspace model, atomic persistence, seed tracks, and event
   journaling.
-- `report`: yard metrics, closure validation, and deterministic summaries.
+- `report`: yard metrics, closure validation, deterministic summaries, and the
+  read-only event audit/reconciliation report.
 
 Entry routes call service commands. Service commands load the persisted
 workspace, apply domain operations, and commit only after the operation
 succeeds. Domain modules never read files. Report modules compute from a
-workspace snapshot and never mutate it.
+workspace snapshot and never mutate it. The event audit report reads both the
+state snapshot and the journal directly and never writes either file: it cannot
+hide problems by appending correction events, and a missing or damaged journal
+is reported as a review/discrepancy item without blocking normal service.
 
 ## Public interfaces
 
@@ -134,6 +138,12 @@ workspace snapshot and never mutate it.
 - `POST /api/shifts/{code}/close`: create a closure snapshot.
 - `GET /api/yard`: return the full yard view.
 - `GET /api/shifts/{code}`: return shift details and recent events.
+- `GET /api/audit/reconciliation`: read-only event audit correlating the
+  journal with the state snapshot; supports `shift`, `kind`, `car`, and
+  `pull_run` query filters on its event view.
+
+A stand-alone read-only audit CLI is also available at
+`python -m switchyard.entry.audit_cli --data-dir <dir>` with the same filters.
 
 The service listens on a local port chosen through `--port` or the
 `SWITCHYARD_PORT` environment variable. Data is stored under `--data-dir` or
