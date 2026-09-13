@@ -50,6 +50,70 @@ def _map_codes(items: list[dict[str, object]]) -> dict[str, dict[str, object]]:
     return {str(item["code"]): item for item in items}
 
 
+def _check_maintenance_track_blockers() -> None:
+    """Maintenance tracks never appear in event messages, so verify their
+    blocker timestamps through payload attribution and the car/shift fallback.
+    """
+    from switchyard.domain.car import FreightCar
+    from switchyard.domain.enums import CarKind, CarState, EventKind, TrackPurpose, TrackState
+    from switchyard.domain.pull import YardEvent
+    from switchyard.domain.shift import YardShift
+    from switchyard.domain.track import StandingTrack
+    from switchyard.report.handoff import build_handoff_briefing
+    from switchyard.storage.workspace import YardWorkspace
+
+    opened_at = "2026-09-13T08:00:00Z"
+    spot_at = "2026-09-13T09:30:00Z"
+
+    def workspace_with(payload: dict[str, object] | None) -> tuple[YardWorkspace, YardShift]:
+        workspace = YardWorkspace()
+        workspace.tracks["MAINT-1"] = StandingTrack(
+            "MAINT-1", TrackPurpose.GENERAL, 6, 180, state=TrackState.MAINTENANCE
+        )
+        workspace.cars["C-MT-01"] = FreightCar(
+            code="C-MT-01",
+            kind=CarKind.BOX,
+            destination="N4",
+            loaded=True,
+            length_m=18,
+            danger_class="NONE",
+            state=CarState.STANDING,
+            location="MAINT-1",
+        )
+        workspace.tracks["MAINT-1"].stack.append("C-MT-01")
+        shift = YardShift(code="SHIFT-MT", dispatcher="KE", opened_at=opened_at)
+        workspace.shifts["SHIFT-MT"] = shift
+        if payload is not None:
+            workspace.events.append(
+                YardEvent(
+                    sequence=1,
+                    at=spot_at,
+                    shift_code="SHIFT-MT",
+                    kind=EventKind.TRAIN_CLASSIFIED,
+                    message="intake INT-MT fully classified",
+                    payload=payload,
+                )
+            )
+        return workspace, shift
+
+    cases = [
+        # Spot record names the track directly.
+        ({"intake_code": "INT-MT", "spots": [{"track_code": "MAINT-1", "car_code": "C-MT-01"}]}, spot_at),
+        # Legacy payload names only the car: fall back to the car's last event.
+        ({"intake_code": "INT-MT", "spots": [{"car_code": "C-MT-01"}]}, spot_at),
+        # Nothing attributable at all: fall back to the shift opening time.
+        (None, opened_at),
+    ]
+    for payload, expected_at in cases:
+        workspace, shift = workspace_with(payload)
+        briefing = build_handoff_briefing(workspace, shift)
+        assert briefing["totals"]["blockers"] == 1, briefing["blockers"]
+        blocker = briefing["blockers"][0]
+        assert blocker["kind"] == "maintenance_track"
+        assert blocker["code"] == "MAINT-1"
+        assert blocker["last_event_at"] == expected_at, blocker
+
+
 def run(api: ApiClient) -> None:
     api.expect_ok(
         "POST",
@@ -172,7 +236,8 @@ def run(api: ApiClient) -> None:
     assert totals["departed_trains"] == 0
     assert partial["departed"]["items"] == []
 
-    # Remaining blockers mirror the unfinished work.
+    # Remaining blockers mirror the unfinished work, and every blocker must
+    # carry a valid last-event time (including the unclassified car).
     blocker_codes = {item["code"] for item in partial["blockers"]}
     assert totals["blockers"] == len(partial["blockers"])
     assert "INT-H2" in blocker_codes
@@ -181,6 +246,16 @@ def run(api: ApiClient) -> None:
     assert "C-E7-H2" in blocker_codes
     for item in partial["blockers"]:
         assert item.get("code") and item.get("kind") and item.get("message")
+        assert item.get("last_event_at"), item
+    shift_events = api.expect_ok("GET", "/api/shifts/SHIFT-H1")["events"]
+    receive_h2_at = next(
+        event["at"]
+        for event in shift_events
+        if event["kind"] == "TRAIN_RECEIVED" and event["payload"].get("intake_code") == "INT-H2"
+    )
+    blocker_map = {item["code"]: item for item in partial["blockers"]}
+    assert blocker_map["C-E7-H2"]["last_event_at"] == receive_h2_at
+    assert blocker_map["INT-H2"]["last_event_at"] == receive_h2_at
 
     # Briefing generation is read-only: no extra event was journaled.
     events_before = len(api.expect_ok("GET", "/api/shifts/SHIFT-H1")["events"])
@@ -236,6 +311,10 @@ def run(api: ApiClient) -> None:
     missing = api.expect_error("GET", "/api/handoff-briefing")
     assert missing["code"] == "RESOURCE_BUSY"
     api.expect_error("GET", "/api/shifts/NOPE-99/handoff-briefing")
+
+    # Maintenance-track blocker attribution cannot be driven through the API
+    # (nothing classifies onto MAINT-1), so verify it against persisted state.
+    _check_maintenance_track_blockers()
 
 
 if __name__ == "__main__":

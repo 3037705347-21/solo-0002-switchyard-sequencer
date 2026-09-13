@@ -5,6 +5,11 @@ records events. Every listed object carries its code and the timestamp of the
 last event that mentioned it during the shift, so an incoming crew can see at a
 glance what the outgoing crew received, classified, assembled, pulled,
 departed, and left blocked.
+
+Event-to-object attribution covers trains, pull runs, individual cars, and
+standing tracks: payload values are matched against the persisted entity
+codes, so a car parked unclassified or a car-carrying maintenance track still
+reports the last persisted event time instead of a null.
 """
 
 from __future__ import annotations
@@ -20,30 +25,61 @@ from .closure import closure_blockers
 # preferred and this only covers events persisted before payload enrichment.
 _CODE_RE = re.compile(r"(?:INT|OB|RUN|SHIFT|SNAP)-[A-Z0-9_-]+|C-[A-Z0-9_-]+")
 
-_PAYLOAD_CODE_KEYS = ("intake_code", "outbound_code", "run_code", "shift_code")
+
+def _collect_known_strings(value: Any, known: set[str], found: set[str]) -> None:
+    """Recursively collect payload strings that identify a persisted entity."""
+    if isinstance(value, str):
+        token = value.strip()
+        if token in known:
+            found.add(token)
+    elif isinstance(value, dict):
+        for item in value.values():
+            _collect_known_strings(item, known, found)
+    elif isinstance(value, list):
+        for item in value:
+            _collect_known_strings(item, known, found)
 
 
-def _event_codes(event: Any) -> set[str]:
+def _event_codes(event: Any, known: set[str]) -> set[str]:
     codes: set[str] = set()
-    payload = event.payload or {}
-    for key in _PAYLOAD_CODE_KEYS:
-        value = payload.get(key)
-        if isinstance(value, str) and value:
-            codes.add(value)
+    _collect_known_strings(event.payload or {}, known, codes)
     for match in _CODE_RE.findall(event.message or ""):
-        codes.add(match)
+        if match in known:
+            codes.add(match)
     return codes
 
 
-def _codes_by_event_kind(events: list[Any], kind: Any) -> dict[str, Any]:
+def _latest_event_by_code(events: list[Any], kind: EventKind, known: set[str]) -> dict[str, Any]:
     """Map each object code to the latest event of the given kind."""
     indexed: dict[str, Any] = {}
     for event in events:
         if event.kind != kind:
             continue
-        for code in _event_codes(event):
+        for code in _event_codes(event, known):
             indexed[code] = event
     return indexed
+
+
+def _blocker_last_at(
+    code: str,
+    kind: str,
+    workspace: Any,
+    last_at: dict[str, str],
+    fallback_at: str,
+) -> str:
+    at = last_at.get(code)
+    if at:
+        return at
+    # A track is only mentioned indirectly (cars spotted onto it in the
+    # TRAIN_CLASSIFIED spots payload). When the track itself was never named,
+    # attribute the most recent event known for any car still standing on it.
+    if kind == "maintenance_track":
+        track = workspace.tracks.get(code)
+        if track is not None:
+            candidates = [last_at[item] for item in track.stack if item in last_at]
+            if candidates:
+                return max(candidates)
+    return fallback_at
 
 
 def build_handoff_briefing(workspace: Any, shift: Any, generated_at: str | None = None) -> dict[str, Any]:
@@ -51,21 +87,41 @@ def build_handoff_briefing(workspace: Any, shift: Any, generated_at: str | None 
     shift_code = shift.code
     events = [event for event in workspace.events if event.shift_code == shift_code]
 
-    # Latest timestamp per object code across every shift event.
+    known_codes: set[str] = set()
+    known_codes.update(workspace.cars)
+    known_codes.update(workspace.tracks)
+    known_codes.update(workspace.buffer_bays)
+    known_codes.update(workspace.intakes)
+    known_codes.update(workspace.outbounds)
+    known_codes.update(workspace.runs)
+    known_codes.update(workspace.shifts)
+
+    # Latest timestamp per object code across every shift event. Codes are
+    # matched against persisted entities anywhere in the event payload, so
+    # cars (car_codes/unplaced/spots) and tracks (spots[].track_code) are
+    # covered. Persisted block/spot records are expanded before matching.
     last_at: dict[str, str] = {}
     for event in events:
         at = event.at
-        for code in _event_codes(event):
+        for code in _event_codes(event, known_codes):
             last_at[code] = at
-        if event.kind.value == "CLOSURE_BLOCKED":
-            for blocker in (event.payload or {}).get("blockers", []) or []:
-                code = blocker.get("code") if isinstance(blocker, dict) else None
-                if isinstance(code, str) and code:
-                    last_at[code] = at
+        # Legacy receive events recorded only a car_count: attribute the
+        # receive time to every car in the persisted consist.
+        if event.kind == EventKind.TRAIN_RECEIVED:
+            intake = workspace.intakes.get(event.payload.get("intake_code"))
+            if intake is None:
+                for code in _event_codes(event, known_codes):
+                    candidate = workspace.intakes.get(code)
+                    if candidate is not None:
+                        intake = candidate
+                        break
+            if intake is not None:
+                for car_code in intake.consist:
+                    last_at.setdefault(car_code, at)
 
-    received_index = _codes_by_event_kind(events, EventKind.TRAIN_RECEIVED)
-    created_index = _codes_by_event_kind(events, EventKind.TRAIN_CREATED)
-    planned_index = _codes_by_event_kind(events, EventKind.PULL_PLANNED)
+    received_index = _latest_event_by_code(events, EventKind.TRAIN_RECEIVED, known_codes)
+    created_index = _latest_event_by_code(events, EventKind.TRAIN_CREATED, known_codes)
+    planned_index = _latest_event_by_code(events, EventKind.PULL_PLANNED, known_codes)
 
     intake_codes = set(received_index)
     outbound_codes = set(created_index)
@@ -194,14 +250,15 @@ def build_handoff_briefing(workspace: Any, shift: Any, generated_at: str | None 
             continue
         if kind == "unclassified_car" and code not in car_codes:
             continue
-        # maintenance_track blockers describe yard infrastructure and stay
-        # visible regardless of which shift persisted the cars.
+        # maintenance_track blockers describe yard infrastructure. The track
+        # is attributed from the spot events of the cars still standing on it;
+        # the shift opening time is the final fallback so no blocker is null.
         blockers.append(
             {
                 "code": code,
                 "kind": kind,
                 "message": blocker["message"],
-                "last_event_at": last_at.get(code),
+                "last_event_at": _blocker_last_at(code, kind, workspace, last_at, shift.opened_at),
             }
         )
 
