@@ -8,7 +8,8 @@ from ..domain.allocator import classify_intake
 from ..domain.car import CarInput, FreightCar
 from ..domain.enums import CarKind, CarState, EventKind, IntakeState
 from ..domain.errors import ConflictError, NotFoundError, ResourceBusyError, ValidationError
-from ..domain.validators import build_intake_payload
+from ..domain.rules import MAX_TRAIN_CONSIST
+from ..domain.validators import build_intake_append_payload, build_intake_payload
 from .context import YardApplication
 
 
@@ -41,6 +42,56 @@ def create_intake(app: YardApplication, payload: Any) -> dict[str, Any]:
         EventKind.TRAIN_RECEIVED,
         f"intake {train.code} received {len(cars)} cars",
         {"route": train.route, "car_count": len(cars), "arrival_at": train.arrival_at},
+    )
+    app.commit(workspace, event)
+    return {
+        "intake": train.to_dict(),
+        "cars": [car.to_dict() for car in cars],
+    }
+
+
+def append_intake_cars(app: YardApplication, intake_code: str, payload: Any) -> dict[str, Any]:
+    car_inputs = build_intake_append_payload(payload)
+    workspace = app.load()
+    shift_code = _ensure_shift_open(workspace)
+    train = workspace.intakes.get(intake_code)
+    if train is None:
+        raise NotFoundError("intake train", intake_code)
+    if train.state != IntakeState.OPEN:
+        raise ConflictError(
+            f"intake {intake_code} is {train.state.value}; consist changes are only allowed while OPEN",
+            code=intake_code,
+            state=train.state.value,
+        )
+    if len(train.consist) + len(car_inputs) > MAX_TRAIN_CONSIST:
+        raise ValidationError(
+            "too many cars",
+            **{
+                "cars": [
+                    f"consist would exceed {MAX_TRAIN_CONSIST} cars "
+                    f"({len(train.consist)} on hand, {len(car_inputs)} appended)"
+                ]
+            },
+        )
+    for item in car_inputs:
+        if item.code in workspace.cars:
+            raise ConflictError("car code already exists", code=item.code)
+    cars: list[FreightCar] = []
+    for item in car_inputs:
+        car = _car_from_input(item)
+        workspace.cars[car.code] = car
+        train.consist.append(car.code)
+        cars.append(car)
+    event = workspace.record_event(
+        shift_code,
+        EventKind.TRAIN_APPENDED,
+        f"intake {train.code} appended {len(cars)} cars",
+        {
+            "route": train.route,
+            "appended_count": len(cars),
+            "car_codes": [car.code for car in cars],
+            "car_count": len(train.consist),
+        },
     )
     app.commit(workspace, event)
     return {
@@ -99,4 +150,4 @@ def _car_from_input(item: CarInput) -> FreightCar:
     )
 
 
-__all__ = ["classify_intake_command", "create_intake"]
+__all__ = ["append_intake_cars", "classify_intake_command", "create_intake"]

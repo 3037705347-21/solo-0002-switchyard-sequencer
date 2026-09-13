@@ -49,7 +49,11 @@ asks the classifier to place every car onto an active standing track. The
 service validates car codes, dimensions, hazard classes, destination routes,
 and duplicate codes, then applies destination affinity, hazard rating, and
 capacity rules. A fully classified train is persisted and every placed car
-becomes available for outbound planning.
+becomes available for outbound planning. When one or two cars were missed at
+intake, the dispatcher can append them to a train that is still `open` through
+`POST /api/intake-trains/{code}/cars`; the same car and duplicate validation
+runs, the consist, received-car count, and event trail are updated, and trains
+that are already `partial` or `classified` reject structural consist changes.
 
 ### 2. Plan an outbound pull sequence
 
@@ -126,6 +130,7 @@ workspace snapshot and never mutate it.
 
 - `POST /api/shifts`: open a shift.
 - `POST /api/intake-trains`: create an inbound train.
+- `POST /api/intake-trains/{code}/cars`: append missed cars to an open inbound train.
 - `POST /api/intake-trains/{code}/classify`: place cars on standing tracks.
 - `POST /api/outbound-trains`: create an outbound train.
 - `POST /api/outbound-trains/{code}/sequencer`: create a pull run.

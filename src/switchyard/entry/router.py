@@ -44,6 +44,7 @@ class Router:
             Route("GET", r"/api/shifts/(?P<code>[^/]+)", self._shift_view),
             Route("POST", r"/api/shifts/(?P<code>[^/]+)/close", self._close_shift),
             Route("POST", r"/api/intake-trains", self._create_intake),
+            Route("POST", r"/api/intake-trains/(?P<code>[^/]+)/cars", self._append_intake_cars),
             Route("POST", r"/api/intake-trains/(?P<code>[^/]+)/classify", self._classify),
             Route("POST", r"/api/outbound-trains", self._create_outbound),
             Route("POST", r"/api/outbound-trains/(?P<code>[^/]+)/sequencer", self._sequence),
@@ -77,6 +78,9 @@ class Router:
 
     def _create_intake(self, body: Any) -> dict[str, Any]:
         return intake_service.create_intake(self.app, body)
+
+    def _append_intake_cars(self, body: Any, code: str) -> dict[str, Any]:
+        return intake_service.append_intake_cars(self.app, code, body)
 
     def _classify(self, body: Any, code: str) -> dict[str, Any]:
         return intake_service.classify_intake_command(self.app, code)
