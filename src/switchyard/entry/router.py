@@ -46,6 +46,7 @@ class Router:
             Route("POST", r"/api/intake-trains", self._create_intake),
             Route("POST", r"/api/intake-trains/(?P<code>[^/]+)/classify", self._classify),
             Route("POST", r"/api/outbound-trains", self._create_outbound),
+            Route("POST", r"/api/outbound-trains/(?P<code>[^/]+)/plan", self._revise_plan),
             Route("POST", r"/api/outbound-trains/(?P<code>[^/]+)/sequencer", self._sequence),
             Route("POST", r"/api/outbound-trains/(?P<code>[^/]+)/depart", self._depart),
             Route("POST", r"/api/pull-runs/(?P<code>[^/]+)/advance", self._advance),
@@ -83,6 +84,9 @@ class Router:
 
     def _create_outbound(self, body: Any) -> dict[str, Any]:
         return outbound_service.create_outbound(self.app, body)
+
+    def _revise_plan(self, body: Any, code: str) -> dict[str, Any]:
+        return outbound_service.revise_outbound_plan(self.app, code, body)
 
     def _sequence(self, body: Any, code: str) -> dict[str, Any]:
         return outbound_service.sequence_outbound(self.app, code, body)

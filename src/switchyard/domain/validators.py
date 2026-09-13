@@ -131,24 +131,16 @@ def build_intake_payload(raw: Any) -> tuple[IntakeTrain, list[CarInput]]:
     return train, inputs
 
 
-def build_outbound_payload(raw: Any) -> tuple[str, str, list[str]]:
-    body = require_object(raw, "payload")
-    code = require_text(body.get("code"), "code").upper()
-    if not is_entity_code(code, "OB"):
-        raise ValidationError("invalid outbound code", **{"code": ["expected prefix OB-"]})
-    destination = normalize_destination(require_text(body.get("destination"), "destination"))
-    if not destination_known(destination):
-        raise ValidationError("unknown destination", **{"destination": ["N4, E7, S2, or W9"]})
-    car_codes_raw = body.get("car_codes")
-    if not isinstance(car_codes_raw, list) or not car_codes_raw:
+def parse_car_codes(raw_codes: Any, *, allow_empty: bool = False) -> list[str]:
+    if not isinstance(raw_codes, list) or (not allow_empty and not raw_codes):
         raise ValidationError("at least one planned car is required", **{"car_codes": ["must not be empty"]})
-    if len(car_codes_raw) > MAX_PLANNED_CARS:
+    if len(raw_codes) > MAX_PLANNED_CARS:
         raise ValidationError(
             "too many planned cars",
             **{"car_codes": [f"at most {MAX_PLANNED_CARS} cars"]},
         )
     codes: list[str] = []
-    for index, item in enumerate(car_codes_raw):
+    for index, item in enumerate(raw_codes):
         if not isinstance(item, str) or not is_car_code(item):
             raise ValidationError(
                 "invalid car code",
@@ -161,7 +153,24 @@ def build_outbound_payload(raw: Any) -> tuple[str, str, list[str]]:
                 **{f"car_codes[{index}]": ["appears more than once"]},
             )
         codes.append(value)
+    return codes
+
+
+def build_outbound_payload(raw: Any) -> tuple[str, str, list[str]]:
+    body = require_object(raw, "payload")
+    code = require_text(body.get("code"), "code").upper()
+    if not is_entity_code(code, "OB"):
+        raise ValidationError("invalid outbound code", **{"code": ["expected prefix OB-"]})
+    destination = normalize_destination(require_text(body.get("destination"), "destination"))
+    if not destination_known(destination):
+        raise ValidationError("unknown destination", **{"destination": ["N4, E7, S2, or W9"]})
+    codes = parse_car_codes(body.get("car_codes"))
     return code, destination, codes
+
+
+def build_outbound_revision_payload(raw: Any) -> list[str]:
+    body = require_object(raw, "payload")
+    return parse_car_codes(body.get("car_codes"))
 
 
 def build_shift_payload(raw: Any) -> tuple[str, str, str]:
@@ -193,8 +202,10 @@ def parse_transfer_code(raw: Any) -> str:
 __all__ = [
     "build_intake_payload",
     "build_outbound_payload",
+    "build_outbound_revision_payload",
     "build_shift_payload",
     "parse_advance_steps",
+    "parse_car_codes",
     "parse_car_input",
     "parse_transfer_code",
     "require_integer",

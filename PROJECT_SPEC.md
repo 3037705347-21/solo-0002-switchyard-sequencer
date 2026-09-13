@@ -53,13 +53,19 @@ becomes available for outbound planning.
 
 ### 2. Plan an outbound pull sequence
 
-Entry: `POST /api/outbound-trains`, `POST /api/outbound-trains/{code}/sequencer`
+Entry: `POST /api/outbound-trains`, `POST /api/outbound-trains/{code}/plan`,
+`POST /api/outbound-trains/{code}/sequencer`
 
 The planner creates an outbound train for a destination with an explicit car
-sequence. The sequencer checks that each car is standing, unreserved, and on a
-compatible track, then simulates the LIFO constraint of every source stack. It
+sequence. While the train is still a draft, the planned sequence can be
+replaced wholesale to add, remove, or reorder cars; every revision re-checks
+standing state, destination, track operability, occupancy by other trains, and
+LIFO executability, and the response lists the resulting planned order. Once
+the sequencer checks that each car is standing, unreserved, and on a
+compatible track, it simulates the LIFO constraint of every source stack. It
 generates a `PullRun` with buffer, pull, and return actions, reserves the
-planned cars, and moves the outbound train into a planned state.
+planned cars, and moves the outbound train into a planned state. Planned or
+later trains cannot be revised.
 
 ### 3. Execute pull actions and depart the outbound train
 
@@ -91,7 +97,9 @@ view for verification.
 - Intake state moves from `open` through `partial` to `classified`; cancellation
   is allowed only before classification.
 - Outbound state moves from `draft` to `planned` when a pull run is created,
-  then to `ready` when assembly completes, then to `departed`.
+  then to `ready` when assembly completes, then to `departed`. The planned car
+  sequence of a `draft` train may be replaced; a failed revision validates
+  fully before mutating state, so it leaves no reservation or partial edit.
 - Pull runs move from `queued` to `running`, then `completed` or `failed`.
 - Car state moves from `received` to `standing`, `reserved`, `assembled`, and
   `departed`.
@@ -128,6 +136,9 @@ workspace snapshot and never mutate it.
 - `POST /api/intake-trains`: create an inbound train.
 - `POST /api/intake-trains/{code}/classify`: place cars on standing tracks.
 - `POST /api/outbound-trains`: create an outbound train.
+- `POST /api/outbound-trains/{code}/plan`: replace the planned car sequence of a
+  draft outbound train (add, remove, or reorder); rejected once the train is
+  planned or later.
 - `POST /api/outbound-trains/{code}/sequencer`: create a pull run.
 - `POST /api/pull-runs/{code}/advance`: execute the next pull actions.
 - `POST /api/outbound-trains/{code}/depart`: mark an assembled train departed.

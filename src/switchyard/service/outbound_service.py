@@ -5,11 +5,12 @@ from __future__ import annotations
 from typing import Any
 
 from ..domain.enums import CarState, EventKind, OutboundState
-from ..domain.errors import ConflictError, NotFoundError, ResourceBusyError, ValidationError
+from ..domain.errors import ConflictError, NotFoundError, ResourceBusyError, StateTransitionError, ValidationError
 from ..domain.outbound import OutboundTrain
+from ..domain.plan_revision import validate_draft_consist
 from ..domain.sequencer import plan_pull_run
 from ..domain.timeutil import now_iso
-from ..domain.validators import build_outbound_payload, parse_transfer_code
+from ..domain.validators import build_outbound_payload, build_outbound_revision_payload, parse_transfer_code
 from .context import YardApplication
 
 
@@ -81,6 +82,75 @@ def create_outbound(app: YardApplication, payload: Any) -> dict[str, Any]:
     return train.to_dict()
 
 
+def revise_outbound_plan(app: YardApplication, outbound_code: str, payload: Any) -> dict[str, Any]:
+    """Replace the planned car sequence of a DRAFT outbound train.
+
+    Every validation runs against the in-memory workspace before the list is
+    touched, so a rejected revision neither reserves a car nor leaves the train
+    half edited. PLANNED trains and later states are immutable here.
+    """
+    new_car_codes = build_outbound_revision_payload(payload)
+    workspace = app.load()
+    shift_code = _ensure_shift_open(workspace)
+    outbound = workspace.outbounds.get(outbound_code)
+    if outbound is None:
+        raise NotFoundError("outbound train", outbound_code)
+    if outbound.state != OutboundState.DRAFT:
+        raise StateTransitionError(
+            "outbound train",
+            outbound.state.value,
+            OutboundState.DRAFT.value,
+            "only DRAFT trains can revise planned cars",
+        )
+    occupied = _occupied_car_codes(workspace)
+    occupied.difference_update(outbound.planned_car_codes)
+    # Pure read-only check: raises before any mutation happens.
+    validate_draft_consist(
+        outbound.destination,
+        new_car_codes,
+        workspace.cars,
+        workspace.tracks,
+        occupied,
+    )
+    previous_codes = list(outbound.planned_car_codes)
+    added = [code for code in new_car_codes if code not in previous_codes]
+    removed = [code for code in previous_codes if code not in new_car_codes]
+    reordered = added == [] and removed == [] and previous_codes != new_car_codes
+    outbound.planned_car_codes = list(new_car_codes)
+    event = workspace.record_event(
+        shift_code,
+        EventKind.PLAN_REVISED,
+        f"outbound {outbound.code} draft plan revised",
+        {
+            "previous_car_codes": previous_codes,
+            "planned_car_codes": list(new_car_codes),
+            "added": added,
+            "removed": removed,
+            "reordered": reordered,
+        },
+    )
+    app.commit(workspace, event)
+    return {
+        "outbound": outbound.to_dict(),
+        "changes": {
+            "added": added,
+            "removed": removed,
+            "reordered": reordered,
+            "previous_count": len(previous_codes),
+            "planned_count": len(new_car_codes),
+        },
+        "planned_sequence": [
+            {
+                "position": index,
+                "car_code": code,
+                "track_code": workspace.cars[code].location,
+                "destination": workspace.cars[code].destination,
+            }
+            for index, code in enumerate(new_car_codes, start=1)
+        ],
+    }
+
+
 def sequence_outbound(app: YardApplication, outbound_code: str, payload: Any) -> dict[str, Any]:
     transfer_code = parse_transfer_code(payload)
     workspace = app.load()
@@ -117,4 +187,4 @@ def sequence_outbound(app: YardApplication, outbound_code: str, payload: Any) ->
     return {"pull_run": run.to_dict(), "outbound": outbound.to_dict()}
 
 
-__all__ = ["create_outbound", "sequence_outbound"]
+__all__ = ["create_outbound", "revise_outbound_plan", "sequence_outbound"]
