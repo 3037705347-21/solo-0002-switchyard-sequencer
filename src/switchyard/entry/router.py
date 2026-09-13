@@ -49,6 +49,8 @@ class Router:
             Route("POST", r"/api/outbound-trains/(?P<code>[^/]+)/sequencer", self._sequence),
             Route("POST", r"/api/outbound-trains/(?P<code>[^/]+)/depart", self._depart),
             Route("POST", r"/api/pull-runs/(?P<code>[^/]+)/advance", self._advance),
+            Route("POST", r"/api/pull-runs/(?P<code>[^/]+)/moves", self._record_move),
+            Route("GET", r"/api/pull-runs/(?P<code>[^/]+)/reconciliation", self._reconciliation),
         ]
 
     def dispatch(self, method: str, path: str, body: Any) -> tuple[int, dict[str, Any]]:
@@ -92,6 +94,12 @@ class Router:
 
     def _advance(self, body: Any, code: str) -> dict[str, Any]:
         return run_service.advance_run(self.app, code, body)
+
+    def _record_move(self, body: Any, code: str) -> dict[str, Any]:
+        return run_service.record_move(self.app, code, body)
+
+    def _reconciliation(self, body: Any, code: str) -> dict[str, Any]:
+        return run_service.get_reconciliation(self.app, code)
 
 
 __all__ = ["Route", "Router"]

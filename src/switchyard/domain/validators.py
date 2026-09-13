@@ -6,10 +6,11 @@ import re
 from typing import Any
 
 from .car import CarInput, FreightCar
-from .enums import CarKind
+from .enums import CarKind, MoveVerb
 from .errors import ValidationError
 from .intake import IntakeTrain
 from .outbound import OutboundTrain
+from .pull import MoveStep
 from .rules import (
     MAX_CAR_LENGTH_M,
     MAX_PLANNED_CARS,
@@ -190,8 +191,24 @@ def parse_transfer_code(raw: Any) -> str:
     return transfer
 
 
+def build_move_payload(raw: Any) -> MoveStep:
+    body = require_object(raw, "payload")
+    verb_text = require_text(body.get("verb"), "verb").upper()
+    try:
+        verb = MoveVerb.parse(verb_text)
+    except ValueError as exc:
+        raise ValidationError("unknown move verb", **{"verb": ["BUFFER, PULL, or RETURN"]}) from exc
+    car_code = require_text(body.get("car_code"), "car_code").upper()
+    if not is_car_code(car_code):
+        raise ValidationError("invalid car code", **{"car_code": ["expected format C-PREFIX-NUMBER"]})
+    source_code = require_text(body.get("source_code"), "source_code", 12).upper()
+    target_code = require_text(body.get("target_code"), "target_code", 12).upper()
+    return MoveStep(verb=verb, car_code=car_code, source_code=source_code, target_code=target_code)
+
+
 __all__ = [
     "build_intake_payload",
+    "build_move_payload",
     "build_outbound_payload",
     "build_shift_payload",
     "parse_advance_steps",

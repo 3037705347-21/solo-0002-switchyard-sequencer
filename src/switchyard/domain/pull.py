@@ -34,6 +34,46 @@ class MoveStep:
 
 
 @dataclass(slots=True)
+class MoveRecord:
+    """One physical shunting action recorded against a pull run.
+
+    The log is append-only: completed physical actions are preserved for
+    manual review even when they deviate from the planned steps.
+    """
+
+    index: int
+    verb: MoveVerb
+    car_code: str
+    source_code: str
+    target_code: str
+    origin: str
+    at: str = field(default_factory=now_iso)
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "index": self.index,
+            "verb": str(self.verb),
+            "car_code": self.car_code,
+            "source_code": self.source_code,
+            "target_code": self.target_code,
+            "origin": self.origin,
+            "at": self.at,
+        }
+
+    @classmethod
+    def from_dict(cls, raw: dict[str, object]) -> "MoveRecord":
+        return cls(
+            index=int(raw.get("index", 0)),
+            verb=MoveVerb.parse(str(raw["verb"])),
+            car_code=str(raw["car_code"]),
+            source_code=str(raw["source_code"]),
+            target_code=str(raw["target_code"]),
+            origin=str(raw.get("origin", "plan")),
+            at=str(raw.get("at", "")),
+        )
+
+
+@dataclass(slots=True)
 class PullRun:
     code: str
     outbound_code: str
@@ -45,6 +85,7 @@ class PullRun:
     started_at: str | None = None
     completed_at: str | None = None
     error: str | None = None
+    actual_moves: list[MoveRecord] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, object]:
         return {
@@ -58,11 +99,13 @@ class PullRun:
             "started_at": self.started_at,
             "completed_at": self.completed_at,
             "error": self.error,
+            "actual_moves": [record.to_dict() for record in self.actual_moves],
         }
 
     @classmethod
     def from_dict(cls, raw: dict[str, object]) -> "PullRun":
         steps = [MoveStep.from_dict(dict(item)) for item in raw.get("steps", [])]
+        actual_moves = [MoveRecord.from_dict(dict(item)) for item in raw.get("actual_moves", [])]
         return cls(
             code=str(raw["code"]),
             outbound_code=str(raw["outbound_code"]),
@@ -74,6 +117,7 @@ class PullRun:
             started_at=None if raw.get("started_at") is None else str(raw["started_at"]),
             completed_at=None if raw.get("completed_at") is None else str(raw["completed_at"]),
             error=None if raw.get("error") is None else str(raw["error"]),
+            actual_moves=actual_moves,
         )
 
     def remaining(self) -> int:
@@ -116,4 +160,4 @@ class YardEvent:
         )
 
 
-__all__ = ["MoveStep", "PullRun", "YardEvent"]
+__all__ = ["MoveRecord", "MoveStep", "PullRun", "YardEvent"]

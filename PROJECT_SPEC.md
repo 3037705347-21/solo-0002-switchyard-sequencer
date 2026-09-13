@@ -64,14 +64,27 @@ planned cars, and moves the outbound train into a planned state.
 ### 3. Execute pull actions and depart the outbound train
 
 Entry: `POST /api/pull-runs/{code}/advance`,
+`POST /api/pull-runs/{code}/moves`,
+`GET /api/pull-runs/{code}/reconciliation`,
 `POST /api/outbound-trains/{code}/depart`
 
 The crew lead advances the pull run one action at a time. Each advance verifies
 the current track top, the buffer state, and the car reservation before
 changing locations. Buffer cars are parked and later returned, planned cars are
-appended to the outbound assembled consist, and the run completes only when the
-assembled sequence matches the planned sequence. The dispatcher can then mark
-the train departed and move its cars into the departed state.
+appended to the outbound assembled consist, and every executed action is
+appended to the run's move log. After each action the service recomputes the
+assembly reconciliation: a position-by-position mapping of the planned consist
+to the assembled one, derived from the run's pull steps, the assembled
+consist, and the move log. Missing cars, duplicate cars, sequence deviations,
+and source mismatches are reported with the position where the deviation
+starts; a diverging advance stops at the offending action and keeps the
+completed physical actions for manual review. The crew can report an actual
+physical move through the moves endpoint, which applies it under the same
+physical rules and records it in the move log without advancing the planned
+cursor. The run completes only when the reconciliation is aligned, and the
+dispatcher can mark the train departed only while the reconciliation stays
+aligned; discrepancies cannot be cleared by deleting cars or editing the
+planned order, because the run steps and the move log do not change.
 
 ### 4. Close a shift with a yard balance
 
@@ -130,6 +143,8 @@ workspace snapshot and never mutate it.
 - `POST /api/outbound-trains`: create an outbound train.
 - `POST /api/outbound-trains/{code}/sequencer`: create a pull run.
 - `POST /api/pull-runs/{code}/advance`: execute the next pull actions.
+- `POST /api/pull-runs/{code}/moves`: record an actual shunting move.
+- `GET /api/pull-runs/{code}/reconciliation`: return the assembly reconciliation.
 - `POST /api/outbound-trains/{code}/depart`: mark an assembled train departed.
 - `POST /api/shifts/{code}/close`: create a closure snapshot.
 - `GET /api/yard`: return the full yard view.

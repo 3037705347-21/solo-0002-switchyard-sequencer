@@ -85,6 +85,19 @@ class MoveVerb(EnumValue):
     PULL = "PULL"
 
 
+class DiscrepancyKind(EnumValue):
+    MISSING = "MISSING"
+    DUPLICATE = "DUPLICATE"
+    SEQUENCE = "SEQUENCE"
+    SOURCE = "SOURCE"
+
+
+class AssemblyStatus(EnumValue):
+    PENDING = "PENDING"
+    ALIGNED = "ALIGNED"
+    DIVERGED = "DIVERGED"
+
+
 class EventKind(EnumValue):
     SHIFT_OPENED = "SHIFT_OPENED"
     TRAIN_RECEIVED = "TRAIN_RECEIVED"
@@ -94,6 +107,8 @@ class EventKind(EnumValue):
     PULL_RUN_STARTED = "PULL_RUN_STARTED"
     PULL_RUN_ADVANCED = "PULL_RUN_ADVANCED"
     PULL_RUN_COMPLETED = "PULL_RUN_COMPLETED"
+    MOVE_RECORDED = "MOVE_RECORDED"
+    ASSEMBLY_DIVERGED = "ASSEMBLY_DIVERGED"
     TRAIN_DEPARTED = "TRAIN_DEPARTED"
     SHIFT_CLOSED = "SHIFT_CLOSED"
     CLOSURE_BLOCKED = "CLOSURE_BLOCKED"
@@ -101,8 +116,10 @@ class EventKind(EnumValue):
 
 
 __all__ = [
+    "AssemblyStatus",
     "CarKind",
     "CarState",
+    "DiscrepancyKind",
     "EnumValue",
     "EventKind",
     "IntakeState",
