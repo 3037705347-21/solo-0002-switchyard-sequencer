@@ -70,6 +70,12 @@ persisted data directory. The profile aggregates, per car:
   state or location (or with stack/consist membership), and `evidence_gaps`
   reports missing journal evidence for older data. Surviving entity fragments
   are kept with `evidence: "entity"`; missing fragments are never fabricated.
+- Run and departure journal events carry no run/train code, so events are
+  attributed only when one owner is forced by the actual pull records
+  (completed consist, step counts, sequence windows, timestamps). When later
+  plans execute first or identical events cannot be tied to one run, the event
+  is left unattributed and reported as an `AMBIGUOUS_*` evidence gap; it is
+  never borrowed from another car's run.
 - Only car-relevant structured journal events are used; shift, closure, and
   yard-view messages are ignored, and event message text is never parsed.
 - Queries are read-only and deterministic: repeated calls return the same

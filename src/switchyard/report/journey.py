@@ -51,6 +51,23 @@ _PHASE_RANK = {
     "DEPARTED": 70,
 }
 
+# Entity timestamps and their journal events are written by the same command,
+# but a second boundary can make them differ by one second. Any larger skew
+# means the event and the entity describe different facts.
+_TIMESTAMP_TOLERANCE_SECONDS = 2
+
+
+def _timestamp_consistent(entity_at: str | None, event_at: str | None) -> bool:
+    entity_at = entity_at or None
+    event_at = event_at or None
+    if entity_at is None or event_at is None:
+        return entity_at is None and event_at is None
+    try:
+        delta = abs((parse_iso(event_at) - parse_iso(entity_at)).total_seconds())
+    except ValueError:
+        return entity_at == event_at
+    return delta <= _TIMESTAMP_TOLERANCE_SECONDS
+
 
 # ---------------------------------------------------------------------------
 # Public API
@@ -105,7 +122,7 @@ class _JourneyContext:
         self.receive_links = self._link_receive_events()
         self.classify_links = self._link_classify_events()
         self.run_links = self._link_run_events()
-        self.depart_links = self._link_depart_events()
+        self.depart_links, self.depart_ambiguous = self._link_depart_events()
 
     def profile_for(self, car_code: str) -> dict[str, Any]:
         car = self.workspace.cars[car_code]
@@ -207,138 +224,238 @@ class _JourneyContext:
         return links
 
     def _link_run_events(self) -> dict[int, dict[str, Any]]:
-        """Reconstruct run lifecycles from journal events.
+        """Assign run lifecycle events to runs under hard identity constraints.
 
-        Run records carry no event codes and run events carry no run code, so a
-        greedy scanner walks the journal in sequence order and assigns each
-        event to the earliest still-eligible run (created_at/code tie-break),
-        matching structured payload fields wherever they are present.
+        Run journal events carry no run code, so an event is attached only when
+        its owner is forced:
+
+        * PULL_RUN_COMPLETED identifies the run through the exact completed
+          consist and step count, checked against the persisted run timestamp.
+        * PULL_PLANNED / PULL_RUN_STARTED / PULL_RUN_ADVANCED must fall inside
+          the plan < start < advance (strictly increasing cursor) < completion
+          sequence window of one run and match that run's fields/timestamps.
+
+        Feasibility is solved to a fixed point by uniqueness (event with one
+        feasible run) and necessity (run that needs an event and has one
+        feasible event). Anything that stays ambiguous is left unassigned and
+        recorded on every still-feasible run as an evidence gap; it is never
+        guessed onto another car.
         """
 
-        bonds: dict[int, dict[str, Any]] = {
+        plans = self._events_of(EventKind.PULL_PLANNED)
+        starts = self._events_of(EventKind.PULL_RUN_STARTED)
+        advances = self._events_of(EventKind.PULL_RUN_ADVANCED)
+        completions = self._events_of(EventKind.PULL_RUN_COMPLETED)
+
+        bond_for: dict[int, dict[str, Any]] = {
             id(run): {
                 "plan": None,
                 "started": None,
                 "advances": [],
                 "completed": None,
-                "cursor": 0,
-                "stage": "NEW",
+                "ambiguous": {
+                    EventKind.PULL_PLANNED: [],
+                    EventKind.PULL_RUN_STARTED: [],
+                    EventKind.PULL_RUN_ADVANCED: [],
+                    EventKind.PULL_RUN_COMPLETED: [],
+                },
             }
             for run in self.runs
         }
 
         def bond(run: Any) -> dict[str, Any]:
-            return bonds[id(run)]
+            return bond_for[id(run)]
 
-        for event in self.events:
-            if event.kind not in _CAR_EVENT_KINDS:
-                continue
-            payload = event.payload or {}
-            if event.kind == EventKind.PULL_PLANNED:
-                transfer = payload.get("transfer_code")
-                step_count = payload.get("steps")
-                chosen = next(
-                    (
-                        run
-                        for run in self.runs
-                        if bond(run)["stage"] == "NEW"
-                        and transfer is not None
-                        and run.transfer_code == str(transfer)
-                        and step_count is not None
-                        and len(run.steps) == int(step_count)
-                    ),
-                    None,
+        def assign(run: Any, kind: EventKind, event: Any) -> None:
+            run_bond = bond(run)
+            if kind == EventKind.PULL_PLANNED:
+                run_bond["plan"] = event
+            elif kind == EventKind.PULL_RUN_STARTED:
+                run_bond["started"] = event
+            elif kind == EventKind.PULL_RUN_ADVANCED:
+                run_bond["advances"].append(event)
+            else:
+                run_bond["completed"] = event
+
+        # Completion anchors: identity by completed consist + step count.
+        unassigned = {
+            EventKind.PULL_PLANNED: list(plans),
+            EventKind.PULL_RUN_STARTED: list(starts),
+            EventKind.PULL_RUN_ADVANCED: list(advances),
+            EventKind.PULL_RUN_COMPLETED: list(completions),
+        }
+
+        for event in list(unassigned[EventKind.PULL_RUN_COMPLETED]):
+            candidates = self._completion_candidates(event, bond)
+            if len(candidates) == 1:
+                assign(candidates[0], EventKind.PULL_RUN_COMPLETED, event)
+                unassigned[EventKind.PULL_RUN_COMPLETED].remove(event)
+            else:
+                for run in candidates:
+                    bond(run)["ambiguous"][EventKind.PULL_RUN_COMPLETED].append(event)
+
+        kinds = (
+            EventKind.PULL_PLANNED,
+            EventKind.PULL_RUN_STARTED,
+            EventKind.PULL_RUN_ADVANCED,
+        )
+        necessity_kinds = (EventKind.PULL_PLANNED, EventKind.PULL_RUN_STARTED)
+
+        def needs_event(run: Any, kind: EventKind) -> bool:
+            run_bond = bond(run)
+            if kind == EventKind.PULL_PLANNED:
+                return run_bond["plan"] is None and (
+                    run_bond["started"] is not None or run_bond["completed"] is not None
                 )
-                if chosen is None:
-                    chosen = next(
-                        (run for run in self.runs if bond(run)["stage"] == "NEW"),
-                        None,
-                    )
-                if chosen is not None:
-                    bond(chosen)["plan"] = event
-                    bond(chosen)["stage"] = "PLANNED"
-            elif event.kind == EventKind.PULL_RUN_STARTED:
-                total = payload.get("total_steps")
-                chosen = next(
-                    (
-                        run
-                        for run in self.runs
-                        if bond(run)["stage"] == "PLANNED"
-                        and (total is None or len(run.steps) == int(total))
-                    ),
-                    None,
+            if kind == EventKind.PULL_RUN_STARTED:
+                return run_bond["started"] is None and (
+                    run_bond["completed"] is not None
+                    or bool(run_bond["advances"])
+                    or run.started_at is not None
                 )
-                if chosen is not None:
-                    bond(chosen)["started"] = event
-                    bond(chosen)["stage"] = "RUNNING"
-            elif event.kind == EventKind.PULL_RUN_ADVANCED:
-                current_step = payload.get("current_step")
-                chosen = None
+            # Advance events are never forced: a run can finish in a single
+            # advance call without ever emitting a PULL_RUN_ADVANCED event.
+            return False
+
+        progressed = True
+        while progressed and any(unassigned[kind] for kind in kinds):
+            progressed = False
+            # Uniqueness: event feasible for exactly one run.
+            for kind in kinds:
+                kept: list[Any] = []
+                for event in unassigned[kind]:
+                    candidates = self._event_candidate_runs(kind, event, bond)
+                    if len(candidates) == 1:
+                        assign(candidates[0], kind, event)
+                        progressed = True
+                    else:
+                        kept.append(event)
+                unassigned[kind] = kept
+            # Necessity: a run that must have this kind of event and sees
+            # exactly one still-feasible event claims it.
+            for kind in necessity_kinds:
                 for run in self.runs:
                     run_bond = bond(run)
-                    if run_bond["stage"] != "RUNNING":
+                    if not needs_event(run, kind):
                         continue
-                    if current_step is None or run_bond["cursor"] <= int(current_step) <= len(run.steps):
-                        chosen = run
-                        break
-                if chosen is not None:
-                    run_bond = bond(chosen)
-                    run_bond["advances"].append(event)
-                    if current_step is not None:
-                        run_bond["cursor"] = max(run_bond["cursor"], int(current_step))
-            elif event.kind == EventKind.PULL_RUN_COMPLETED:
-                assembled = payload.get("assembled_car_codes")
-                step_count = payload.get("steps")
-                chosen = None
-                if isinstance(assembled, list):
-                    wanted = {str(code) for code in assembled}
-                    chosen = next(
-                        (
-                            run
-                            for run in self.runs
-                            if bond(run)["stage"] == "RUNNING"
-                            and set(self._run_planned_codes(run)) == wanted
-                        ),
-                        None,
-                    )
-                if chosen is None:
-                    chosen = next(
-                        (
-                            run
-                            for run in self.runs
-                            if bond(run)["stage"] == "RUNNING"
-                            and (step_count is None or len(run.steps) == int(step_count))
-                        ),
-                        None,
-                    )
-                if chosen is not None:
-                    run_bond = bond(chosen)
-                    run_bond["completed"] = event
-                    run_bond["stage"] = "DONE"
-                    run_bond["cursor"] = len(chosen.steps)
-        return bonds
+                    options = [
+                        event
+                        for event in unassigned[kind]
+                        if run in self._event_candidate_runs(kind, event, bond)
+                    ]
+                    if len(options) == 1:
+                        assign(run, kind, options[0])
+                        unassigned[kind].remove(options[0])
+                        progressed = True
 
-    def _link_depart_events(self) -> dict[int, Any]:
-        """Greedily map TRAIN_DEPARTED events to outbound trains."""
+        # Everything still unassigned here is genuinely ambiguous: record it
+        # on each run that could plausibly own it, never picking one.
+        for kind in kinds:
+            for event in unassigned[kind]:
+                for run in self._event_candidate_runs(kind, event, bond):
+                    ambiguous = bond(run)["ambiguous"][kind]
+                    if event not in ambiguous:
+                        ambiguous.append(event)
+
+        for run in self.runs:
+            bond(run)["advances"].sort(key=lambda item: item.sequence)
+        return bond_for
+
+    def _completion_candidates(self, event: Any, bond: Any) -> list[Any]:
+        payload = event.payload or {}
+        assembled = payload.get("assembled_car_codes")
+        step_count = payload.get("steps")
+        wanted = [str(code) for code in assembled] if isinstance(assembled, list) else None
+        return [
+            run
+            for run in self.runs
+            if bond(run)["completed"] is None
+            and (wanted is None or self._run_planned_codes(run) == wanted)
+            and (step_count is None or len(run.steps) == int(step_count))
+            and _timestamp_consistent(run.completed_at, event.at)
+        ]
+
+    def _event_candidate_runs(self, kind: EventKind, event: Any, bond: Any) -> list[Any]:
+        payload = event.payload or {}
+        candidates: list[Any] = []
+        for run in self.runs:
+            run_bond = bond(run)
+            if kind == EventKind.PULL_PLANNED:
+                if run_bond["plan"] is not None:
+                    continue
+                if not _timestamp_consistent(run.created_at, event.at):
+                    continue
+                if payload.get("transfer_code") is not None and run.transfer_code != str(payload["transfer_code"]):
+                    continue
+                if payload.get("steps") is not None and len(run.steps) != int(payload["steps"]):
+                    continue
+                if run_bond["started"] is not None and event.sequence > run_bond["started"].sequence:
+                    continue
+                if run_bond["completed"] is not None and event.sequence > run_bond["completed"].sequence:
+                    continue
+            elif kind == EventKind.PULL_RUN_STARTED:
+                if run_bond["started"] is not None:
+                    continue
+                if not _timestamp_consistent(run.started_at, event.at):
+                    continue
+                if payload.get("total_steps") is not None and len(run.steps) != int(payload["total_steps"]):
+                    continue
+                if run_bond["plan"] is not None and event.sequence < run_bond["plan"].sequence:
+                    continue
+                if run_bond["completed"] is not None and event.sequence > run_bond["completed"].sequence:
+                    continue
+            else:  # PULL_RUN_ADVANCED
+                cursor = payload.get("current_step")
+                if cursor is None or int(cursor) >= len(run.steps):
+                    continue
+                if run.started_at is None:
+                    continue
+                if run_bond["plan"] is not None and event.sequence < run_bond["plan"].sequence:
+                    continue
+                if run_bond["started"] is not None and event.sequence < run_bond["started"].sequence:
+                    continue
+                if run_bond["completed"] is not None and event.sequence > run_bond["completed"].sequence:
+                    continue
+                if run_bond["advances"]:
+                    last_cursor = int((run_bond["advances"][-1].payload or {}).get("current_step", -1))
+                    if int(cursor) <= last_cursor:
+                        continue
+            candidates.append(run)
+        return candidates
+
+    def _link_depart_events(self) -> tuple[dict[int, Any], dict[int, list[Any]]]:
+        """Assign TRAIN_DEPARTED events only when the owner is unique.
+
+        Returns the unique event per train and, for every train that could
+        plausibly own an unassigned event, the candidate events kept as an
+        evidence gap instead of being guessed.
+        """
 
         links: dict[int, Any] = {}
-        remaining = [train for train in self.outbounds if train.assembled_car_codes]
+        ambiguous: dict[int, list[Any]] = {}
+        departed = [
+            train
+            for train in self.outbounds
+            if str(train.state) == "DEPARTED" and train.assembled_car_codes
+        ]
         for event in self._events_of(EventKind.TRAIN_DEPARTED):
-            car_count = (event.payload or {}).get("car_count")
-            match = next(
-                (
-                    train
-                    for train in remaining
-                    if car_count is not None and len(train.assembled_car_codes) == int(car_count)
-                ),
-                None,
-            )
-            if match is None:
-                match = next(iter(remaining), None)
-            if match is not None:
-                links[id(match)] = event
-                remaining.remove(match)
-        return links
+            payload = event.payload or {}
+            car_count = payload.get("car_count")
+            departed_at = payload.get("departed_at")
+            candidates = [
+                train
+                for train in departed
+                if id(train) not in links
+                and (car_count is None or len(train.assembled_car_codes) == int(car_count))
+                and _timestamp_consistent(train.departed_at, event.at)
+                and (departed_at is None or train.departed_at == str(departed_at))
+            ]
+            if len(candidates) == 1:
+                links[id(candidates[0])] = event
+            else:
+                for train in candidates:
+                    ambiguous.setdefault(id(train), []).append(event)
+        return links, ambiguous
 
     # -- entity helpers ----------------------------------------------------
 
@@ -502,6 +619,7 @@ class _JourneyContext:
         boundaries = self._step_boundaries(run, bond, executed)
         pull_count = 0
         missing_time = False
+        ambiguous_time = False
         for step_index, step in enumerate(run.steps):
             if step_index >= executed or step.car_code != car_code:
                 continue
@@ -538,7 +656,13 @@ class _JourneyContext:
                 entry["_sub"] = step_index
             else:
                 entry["evidence"] = "entity"
-                missing_time = True
+                ambiguous_events = bond["ambiguous"][EventKind.PULL_RUN_ADVANCED]
+                if bond["completed"] is None and bond["ambiguous"][EventKind.PULL_RUN_COMPLETED]:
+                    ambiguous_events = ambiguous_events + bond["ambiguous"][EventKind.PULL_RUN_COMPLETED]
+                if ambiguous_events:
+                    ambiguous_time = True
+                else:
+                    missing_time = True
                 # All moves of one run share the run-group anchor (reserved)
                 # and sort within the group by step index.
                 _anchor_fallback_key(
@@ -552,7 +676,17 @@ class _JourneyContext:
                     ),
                 )
             entries.append(entry)
-        if missing_time:
+        if ambiguous_time:
+            gaps.append(
+                _gap(
+                    "AMBIGUOUS_MOVE_EVENT",
+                    car_code,
+                    f"executed move(s) of run {run.code} could not be matched to a unique "
+                    "advance/completion journal event; no other run's event is used",
+                    run_code=run.code,
+                )
+            )
+        elif missing_time:
             gaps.append(
                 _gap(
                     "MISSING_MOVE_TIME",
@@ -578,15 +712,30 @@ class _JourneyContext:
         else:
             entry["at"] = run.created_at or None
             entry["evidence"] = "entity"
-            gaps.append(
-                _gap(
-                    "EVIDENCE_FALLBACK",
-                    car_code,
-                    f"RESERVED entry for run {run.code} uses run creation time; journal event missing",
-                    phase="RESERVED",
-                    run_code=run.code,
+            if bond["ambiguous"][EventKind.PULL_PLANNED]:
+                gaps.append(
+                    _gap(
+                        "AMBIGUOUS_PLAN_EVENT",
+                        car_code,
+                        f"plan event for run {run.code} could not be uniquely attributed; "
+                        "reservation time falls back to the run record",
+                        phase="RESERVED",
+                        run_code=run.code,
+                        candidate_event_sequences=[
+                            event.sequence for event in bond["ambiguous"][EventKind.PULL_PLANNED]
+                        ],
+                    )
                 )
-            )
+            else:
+                gaps.append(
+                    _gap(
+                        "EVIDENCE_FALLBACK",
+                        car_code,
+                        f"RESERVED entry for run {run.code} uses run creation time; journal event missing",
+                        phase="RESERVED",
+                        run_code=run.code,
+                    )
+                )
             _anchor_fallback_key(
                 entry,
                 (
@@ -625,20 +774,34 @@ class _JourneyContext:
             )
             entry["detail"] = f"departed on outbound {outbound.code} for {outbound.destination}"
             event = self.depart_links.get(id(outbound))
+            ambiguous_events = self.depart_ambiguous.get(id(outbound), [])
             if event is not None:
                 _anchor_event(entry, event)
             else:
                 entry["at"] = outbound.departed_at
                 entry["evidence"] = "entity"
-                gaps.append(
-                    _gap(
-                        "EVIDENCE_FALLBACK",
-                        car_code,
-                        f"DEPARTED entry on {outbound.code} uses outbound departure time; journal event missing",
-                        phase="DEPARTED",
-                        outbound_code=outbound.code,
+                if ambiguous_events:
+                    gaps.append(
+                        _gap(
+                            "AMBIGUOUS_DEPARTURE_EVENT",
+                            car_code,
+                            f"departure event for {outbound.code} could not be uniquely attributed; "
+                            "departure time falls back to the outbound record",
+                            phase="DEPARTED",
+                            outbound_code=outbound.code,
+                            candidate_event_sequences=[item.sequence for item in ambiguous_events],
+                        )
                     )
-                )
+                else:
+                    gaps.append(
+                        _gap(
+                            "EVIDENCE_FALLBACK",
+                            car_code,
+                            f"DEPARTED entry on {outbound.code} uses outbound departure time; journal event missing",
+                            phase="DEPARTED",
+                            outbound_code=outbound.code,
+                        )
+                    )
                 _anchor_fallback_key(
                     entry,
                     (
