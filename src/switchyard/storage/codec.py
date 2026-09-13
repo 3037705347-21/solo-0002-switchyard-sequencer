@@ -57,4 +57,13 @@ def decode_workspace(raw: dict[str, Any]) -> Any:
     return workspace
 
 
-__all__ = ["decode_workspace", "encode_workspace"]
+def clone_workspace(workspace: Any) -> Any:
+    """Return a deep, detached copy of a workspace snapshot.
+
+    Used by read-only trial simulations so that even accidental mutation
+    cannot reach the persisted workspace or another trial.
+    """
+    return decode_workspace(encode_workspace(workspace))
+
+
+__all__ = ["clone_workspace", "decode_workspace", "encode_workspace"]

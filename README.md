@@ -26,12 +26,15 @@ workflow checks exercise the real HTTP API:
 ```bash
 PYTHONPATH=src python3 checks/wf_intake_classify.py
 PYTHONPATH=src python3 checks/wf_outbound_sequence.py
+PYTHONPATH=src python3 checks/wf_pull_trial.py
 PYTHONPATH=src python3 checks/wf_pull_depart.py
 PYTHONPATH=src python3 checks/wf_close_shift.py
 ```
 
 Each check starts an isolated server on a free port with a temporary data
-directory and stops the server before exiting.
+directory and stops the server before exiting. The pull-trial check starts a
+second server against the same persistent data directory to verify that
+what-if trials leave no runs, reservations, or events behind.
 
 ## Directory structure
 
@@ -71,3 +74,28 @@ GET  /api/yard
 
 Request and response examples are embedded in the project specification and in
 the workflow checks.
+
+## Pull plan trials (what-if, no commitment)
+
+Before committing to a consist, compare candidate car lists with
+`POST /api/pull-trials`. The call is read-only: it simulates on a detached
+copy of the current yard snapshot and returns feasibility, whether and how
+many reversals are needed, the step-by-step buffer/pull/return actions,
+maximum transfer occupancy, blocked cars, the final assembly order, and
+conflicts that are new or resolved relative to the formal plan. It creates no
+run, reservation, or event:
+
+```json
+{
+  "candidate_code": "TRIAL-A",
+  "destination": "N4",
+  "transfer_code": "X1",
+  "car_codes": ["C-N4-08", "C-N4-04"],
+  "baseline_code": "OB-21"
+}
+```
+
+Omit `baseline_code` to auto-compare against the earliest active formal plan
+for the destination, or send `null` to skip comparison. Trials use the same
+simulation core as formal sequencing, so their verdict matches the real
+planner on the same yard state.

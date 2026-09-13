@@ -68,6 +68,20 @@
       "module_ids": ["entry", "service", "domain", "storage"]
     },
     {
+      "id": "trial-pull-plan",
+      "name": "Trial a candidate pull plan without committing",
+      "entry": "POST /api/pull-trials",
+      "steps": [
+        "deep-copy the current yard snapshot for isolation",
+        "run the same LIFO simulation core as formal planning",
+        "report feasibility, reversals, occupancy, blockers, and new or resolved conflicts"
+      ],
+      "success": "the trial returns the same verdict formal planning would give, without persisting anything",
+      "failure": "the trial reports the same conflict codes formal planning would raise on that state",
+      "verification": "workflow check covers no-reverse, needs-reverse, illegal order, and occupied inputs and restarts the service to confirm no state pollution",
+      "module_ids": ["entry", "service", "domain", "storage"]
+    },
+    {
       "id": "execute-pull-depart",
       "name": "Execute pull actions and depart the outbound train",
       "entry": "POST /api/pull-runs/{code}/advance and POST /api/outbound-trains/{code}/depart",

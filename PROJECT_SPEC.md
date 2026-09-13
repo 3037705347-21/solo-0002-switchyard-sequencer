@@ -61,6 +61,29 @@ compatible track, then simulates the LIFO constraint of every source stack. It
 generates a `PullRun` with buffer, pull, and return actions, reserves the
 planned cars, and moves the outbound train into a planned state.
 
+### 2a. Trial a pull plan without committing
+
+Entry: `POST /api/pull-trials`
+
+Before committing to a plan, the planner can trial several candidate car
+lists. The request carries a candidate label, the destination, the proposed
+car order, and the transfer bay; an optional `baseline_code` names a formal
+plan to compare against (omitted compares against the earliest active plan for
+the destination, an explicit `null` disables comparison). The response reports
+feasibility, whether and how many reversals (buffer moves) are needed, the
+step-by-step buffer/pull/return actions, the maximum transfer-bay occupancy,
+the blocked target cars with their blockers, the final assembly order, and
+the conflict list. When a baseline is compared, conflicts are split into
+`new_conflicts` (raised by the candidate but absent from the formal plan) and
+`resolved_conflicts` (present in the formal plan but gone).
+
+A trial is a pure what-if: it runs on a deep copy of the current yard
+snapshot through the same simulation core the formal sequencer uses, so its
+feasibility verdict matches real planning on the same state. It never creates
+a run code, reserves a car, changes an outbound state, records an event, or
+affects another trial; restarting the service leaves no trace of it. The
+formal entries above remain the only way to change plans.
+
 ### 3. Execute pull actions and depart the outbound train
 
 Entry: `POST /api/pull-runs/{code}/advance`,
@@ -105,6 +128,9 @@ view for verification.
   is not reserved elsewhere and the transfer bay has enough capacity.
 - Closure is derived from the persisted workspace and never mutates car or
   track state.
+- Pull plan trials derive from a detached snapshot copy through the same
+  simulation core as formal planning; they never persist runs, reservations,
+  state changes, or events.
 
 ## Modules and dependency direction
 
@@ -112,7 +138,7 @@ view for verification.
 - `service`: application context and workflow commands that coordinate domain,
   storage, and report modules.
 - `domain`: enums, entities, validation, state transitions, allocation rules,
-  pull sequencing, and domain errors.
+  pull sequencing, side-effect-free pull plan trials, and domain errors.
 - `storage`: workspace model, atomic persistence, seed tracks, and event
   journaling.
 - `report`: yard metrics, closure validation, and deterministic summaries.
@@ -128,6 +154,7 @@ workspace snapshot and never mutate it.
 - `POST /api/intake-trains`: create an inbound train.
 - `POST /api/intake-trains/{code}/classify`: place cars on standing tracks.
 - `POST /api/outbound-trains`: create an outbound train.
+- `POST /api/pull-trials`: trial a candidate pull plan without committing.
 - `POST /api/outbound-trains/{code}/sequencer`: create a pull run.
 - `POST /api/pull-runs/{code}/advance`: execute the next pull actions.
 - `POST /api/outbound-trains/{code}/depart`: mark an assembled train departed.

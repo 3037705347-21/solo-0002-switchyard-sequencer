@@ -70,11 +70,20 @@ class ApiClient:
 
 
 class RunningServer:
-    def __init__(self, data_dir: Path | str | None = None):
+    def __init__(self, data_dir: Path | str | None = None, persist: bool = False):
         self.port = free_port()
         self.base_url = f"http://127.0.0.1:{self.port}"
-        self.temp_dir = tempfile.TemporaryDirectory(prefix="switchyard-check-")
-        data_dir = data_dir or Path(self.temp_dir.name) / "data"
+        self._owns_temp_dir = data_dir is None
+        if self._owns_temp_dir:
+            self.temp_dir: tempfile.TemporaryDirectory[str] | None = tempfile.TemporaryDirectory(
+                prefix="switchyard-check-"
+            )
+            data_dir = Path(self.temp_dir.name) / "data"
+        else:
+            self.temp_dir = None
+            data_dir = Path(data_dir)
+            data_dir.mkdir(parents=True, exist_ok=True)
+        self.data_dir = Path(data_dir)
         env = dict(os.environ)
         env["PYTHONPATH"] = str(SRC_DIR)
         self.process = subprocess.Popen(
@@ -125,7 +134,8 @@ class RunningServer:
                 self.process.wait(timeout=5)
         if self.process.stdout:
             self.process.stdout.close()
-        self.temp_dir.cleanup()
+        if self.temp_dir is not None:
+            self.temp_dir.cleanup()
 
     def output(self) -> str:
         if self.process.stdout is None:
@@ -142,6 +152,26 @@ def run_check(check_name: str, fn: Any) -> int:
         return 0
     finally:
         server.stop()
+
+
+def run_check_with_data_dir(check_name: str, fn: Any) -> int:
+    """Run a check against two server lifecycles sharing one persistent data dir."""
+    data_dir = Path(tempfile.mkdtemp(prefix="switchyard-persist-")) / "data"
+    first = RunningServer(data_dir=data_dir)
+    try:
+        first.wait_ready()
+        fn(first.api, data_dir)
+    finally:
+        first.stop()
+    second = RunningServer(data_dir=data_dir)
+    try:
+        second.wait_ready()
+        if hasattr(fn, "after_restart"):
+            fn.after_restart(second.api, data_dir)
+        print(f"OK {check_name}")
+        return 0
+    finally:
+        second.stop()
 
 
 __all__ = ["ApiClient", "PROJECT_ROOT", "RunningServer", "SRC_DIR", "free_port", "run_check"]

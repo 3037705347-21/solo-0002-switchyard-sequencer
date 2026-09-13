@@ -13,6 +13,7 @@ from ..service import (
     query_service,
     run_service,
     shift_service,
+    trial_service,
 )
 from ..service.context import YardApplication
 
@@ -47,6 +48,7 @@ class Router:
             Route("POST", r"/api/intake-trains/(?P<code>[^/]+)/classify", self._classify),
             Route("POST", r"/api/outbound-trains", self._create_outbound),
             Route("POST", r"/api/outbound-trains/(?P<code>[^/]+)/sequencer", self._sequence),
+            Route("POST", r"/api/pull-trials", self._pull_trial),
             Route("POST", r"/api/outbound-trains/(?P<code>[^/]+)/depart", self._depart),
             Route("POST", r"/api/pull-runs/(?P<code>[^/]+)/advance", self._advance),
         ]
@@ -86,6 +88,9 @@ class Router:
 
     def _sequence(self, body: Any, code: str) -> dict[str, Any]:
         return outbound_service.sequence_outbound(self.app, code, body)
+
+    def _pull_trial(self, body: Any) -> dict[str, Any]:
+        return trial_service.run_pull_trial(self.app, body)
 
     def _depart(self, body: Any, code: str) -> dict[str, Any]:
         return run_service.depart_outbound(self.app, code)

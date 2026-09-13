@@ -131,6 +131,31 @@ def build_intake_payload(raw: Any) -> tuple[IntakeTrain, list[CarInput]]:
     return train, inputs
 
 
+def parse_car_codes(car_codes_raw: Any, field_name: str = "car_codes", limit: int = MAX_PLANNED_CARS) -> list[str]:
+    if not isinstance(car_codes_raw, list) or not car_codes_raw:
+        raise ValidationError("at least one planned car is required", **{field_name: ["must not be empty"]})
+    if len(car_codes_raw) > limit:
+        raise ValidationError(
+            "too many planned cars",
+            **{field_name: [f"at most {limit} cars"]},
+        )
+    codes: list[str] = []
+    for index, item in enumerate(car_codes_raw):
+        if not isinstance(item, str) or not is_car_code(item):
+            raise ValidationError(
+                "invalid car code",
+                **{f"{field_name}[{index}]": ["expected format C-PREFIX-NUMBER"]},
+            )
+        value = item.strip().upper()
+        if value in codes:
+            raise ValidationError(
+                "duplicate planned car",
+                **{f"{field_name}[{index}]": ["appears more than once"]},
+            )
+        codes.append(value)
+    return codes
+
+
 def build_outbound_payload(raw: Any) -> tuple[str, str, list[str]]:
     body = require_object(raw, "payload")
     code = require_text(body.get("code"), "code").upper()
@@ -139,28 +164,7 @@ def build_outbound_payload(raw: Any) -> tuple[str, str, list[str]]:
     destination = normalize_destination(require_text(body.get("destination"), "destination"))
     if not destination_known(destination):
         raise ValidationError("unknown destination", **{"destination": ["N4, E7, S2, or W9"]})
-    car_codes_raw = body.get("car_codes")
-    if not isinstance(car_codes_raw, list) or not car_codes_raw:
-        raise ValidationError("at least one planned car is required", **{"car_codes": ["must not be empty"]})
-    if len(car_codes_raw) > MAX_PLANNED_CARS:
-        raise ValidationError(
-            "too many planned cars",
-            **{"car_codes": [f"at most {MAX_PLANNED_CARS} cars"]},
-        )
-    codes: list[str] = []
-    for index, item in enumerate(car_codes_raw):
-        if not isinstance(item, str) or not is_car_code(item):
-            raise ValidationError(
-                "invalid car code",
-                **{f"car_codes[{index}]": ["expected format C-PREFIX-NUMBER"]},
-            )
-        value = item.strip().upper()
-        if value in codes:
-            raise ValidationError(
-                "duplicate planned car",
-                **{f"car_codes[{index}]": ["appears more than once"]},
-            )
-        codes.append(value)
+    codes = parse_car_codes(body.get("car_codes"))
     return code, destination, codes
 
 
@@ -190,11 +194,55 @@ def parse_transfer_code(raw: Any) -> str:
     return transfer
 
 
+def build_trial_payload(raw: Any) -> dict[str, Any]:
+    """Validate a pull-plan trial request without reserving anything."""
+    body = require_object(raw, "payload")
+    destination = normalize_destination(require_text(body.get("destination"), "destination"))
+    if not destination_known(destination):
+        raise ValidationError("unknown destination", **{"destination": ["N4, E7, S2, or W9"]})
+    transfer = require_text(body.get("transfer_code"), "transfer_code").upper()
+    if not re.fullmatch(r"[A-Z][A-Z0-9]{0,8}", transfer):
+        raise ValidationError("invalid transfer code", **{"transfer_code": ["expected short bay code"]})
+    car_codes = parse_car_codes(body.get("car_codes"))
+    candidate = body.get("candidate_code", "TRIAL")
+    if candidate is None:
+        candidate = "TRIAL"
+    candidate = str(candidate).strip().upper()
+    if not re.fullmatch(r"[A-Z0-9][A-Z0-9_-]{0,24}", candidate):
+        raise ValidationError(
+            "invalid candidate label",
+            **{"candidate_code": ["expected a short alphanumeric label"]},
+        )
+    if "baseline_code" not in body:
+        baseline_mode, baseline_code = "auto", None
+    elif body.get("baseline_code") is None:
+        # Explicit null: do not compare against any formal plan.
+        baseline_mode, baseline_code = "none", None
+    else:
+        baseline_mode = "code"
+        baseline_code = require_text(body.get("baseline_code"), "baseline_code").upper()
+        if not is_entity_code(baseline_code, "OB"):
+            raise ValidationError(
+                "invalid baseline outbound code",
+                **{"baseline_code": ["expected prefix OB-"]},
+            )
+    return {
+        "candidate_code": candidate,
+        "destination": destination,
+        "transfer_code": transfer,
+        "car_codes": car_codes,
+        "baseline_mode": baseline_mode,
+        "baseline_code": baseline_code,
+    }
+
+
 __all__ = [
     "build_intake_payload",
     "build_outbound_payload",
     "build_shift_payload",
+    "build_trial_payload",
     "parse_advance_steps",
+    "parse_car_codes",
     "parse_car_input",
     "parse_transfer_code",
     "require_integer",

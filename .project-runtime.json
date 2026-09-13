@@ -16,6 +16,10 @@
       "command": "PYTHONPATH=src python3 checks/wf_outbound_sequence.py"
     },
     {
+      "workflow_id": "trial-pull-plan",
+      "command": "PYTHONPATH=src python3 checks/wf_pull_trial.py"
+    },
+    {
       "workflow_id": "execute-pull-depart",
       "command": "PYTHONPATH=src python3 checks/wf_pull_depart.py"
     },
