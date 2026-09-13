@@ -61,6 +61,16 @@ compatible track, then simulates the LIFO constraint of every source stack. It
 generates a `PullRun` with buffer, pull, and return actions, reserves the
 planned cars, and moves the outbound train into a planned state.
 
+When planning fails, the sequencer returns `PLAN_VALIDATION_FAILED` (HTTP 422)
+with the complete set of per-car failures in one response. Each failure entry
+carries the car code, an actionable reason, the car's current attribution
+(state, location, holding train), the blocking order above it, and a suggested
+next-step object. Suggestions are classified so the dispatcher can tell
+"swap in a different car" (`swap-car`), "run another action first"
+(`act-first`), and "fix a field resource first" (`fix-resource`) apart; the
+service never rewrites the plan itself. A failed planning request commits
+nothing: no car reservations, no pull run record, and no partial events.
+
 ### 3. Execute pull actions and depart the outbound train
 
 Entry: `POST /api/pull-runs/{code}/advance`,

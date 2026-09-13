@@ -35,6 +35,31 @@ class ValidationError(DomainError):
         super().__init__(message, code="VALIDATION_ERROR", status=422, fields=fields or {}, payload=payload)
 
 
+class PlanValidationError(ValidationError):
+    """A pull plan failed validation; carries the full per-car failure set.
+
+    Each failure entry names the car, an actionable reason, the car's current
+    attribution, the blocking order, and a suggested next-step object. The
+    categories distinguish "swap the car", "run another action first", and
+    "fix a field resource first" dispositions.
+    """
+
+    def __init__(self, message: str, failures: list[dict[str, Any]], **payload: Any):
+        fields: dict[str, list[str]] = {}
+        for failure in failures:
+            car_code = failure.get("car_code")
+            key = str(car_code) if car_code else "plan"
+            fields.setdefault(key, []).append(str(failure.get("reason", "unknown")))
+        super().__init__(
+            message,
+            fields=fields,
+            failures=failures,
+            failure_count=len(failures),
+            **payload,
+        )
+        self.code = "PLAN_VALIDATION_FAILED"
+
+
 class NotFoundError(DomainError):
     """The requested code or resource does not exist."""
 
@@ -80,6 +105,7 @@ __all__ = [
     "ConflictError",
     "DomainError",
     "NotFoundError",
+    "PlanValidationError",
     "ResourceBusyError",
     "StateTransitionError",
     "ValidationError",

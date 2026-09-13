@@ -105,6 +105,8 @@ def sequence_outbound(app: YardApplication, outbound_code: str, payload: Any) ->
         workspace.tracks,
         workspace.buffer_bays,
         transfer_code,
+        outbounds=workspace.outbounds,
+        intakes=workspace.intakes,
     )
     workspace.runs[run.code] = run
     event = workspace.record_event(
