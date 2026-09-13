@@ -4,8 +4,9 @@ from __future__ import annotations
 
 from typing import Any
 
-from ..domain.enums import EventKind
 from ..domain.errors import NotFoundError
+from ..domain.validators import parse_metrics_query
+from ..report.shift_metrics import shift_work_metrics
 from ..report.summary import build_summary
 from .context import YardApplication
 
@@ -29,7 +30,24 @@ def shift_view(app: YardApplication, shift_code: str) -> dict[str, Any]:
     if shift is None:
         raise NotFoundError("shift", shift_code)
     events = [event.to_dict() for event in workspace.events if event.shift_code == shift_code]
-    return {"shift": shift.to_dict(), "events": events[-50:]}
+    return {"shift": shift.to_dict(), "events": events[-40:]}
 
 
-__all__ = ["shift_view", "yard_view"]
+def shift_metrics_view(
+    app: YardApplication,
+    shift_code: str,
+    query: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Read-only shift work metrics; never records events and never mutates state."""
+    options = parse_metrics_query(query or {})
+    workspace = app.load()
+    return shift_work_metrics(
+        workspace,
+        shift_code,
+        from_sequence=options["from_sequence"],
+        to_sequence=options["to_sequence"],
+        include_events=bool(options["include_events"]),
+    )
+
+
+__all__ = ["shift_metrics_view", "shift_view", "yard_view"]

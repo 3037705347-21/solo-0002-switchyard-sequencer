@@ -134,6 +134,11 @@ workspace snapshot and never mutate it.
 - `POST /api/shifts/{code}/close`: create a closure snapshot.
 - `GET /api/yard`: return the full yard view.
 - `GET /api/shifts/{code}`: return shift details and recent events.
+- `GET /api/shifts/{code}/work-metrics`: return read-only shift work metrics,
+  optionally bounded by inclusive `from_sequence` / `to_sequence` query
+  parameters. The view is derived from the event trail and object timestamps,
+  never records events, keeps unknown durations as `null`, and is deterministic
+  for the same event batch across restarts and historical range queries.
 
 The service listens on a local port chosen through `--port` or the
 `SWITCHYARD_PORT` environment variable. Data is stored under `--data-dir` or

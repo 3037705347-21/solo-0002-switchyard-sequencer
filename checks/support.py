@@ -70,11 +70,17 @@ class ApiClient:
 
 
 class RunningServer:
-    def __init__(self, data_dir: Path | str | None = None):
+    def __init__(self, data_dir: Path | str | None = None, cleanup: bool = True):
         self.port = free_port()
         self.base_url = f"http://127.0.0.1:{self.port}"
-        self.temp_dir = tempfile.TemporaryDirectory(prefix="switchyard-check-")
-        data_dir = data_dir or Path(self.temp_dir.name) / "data"
+        self._cleanup = cleanup
+        if data_dir is None:
+            self.temp_dir = tempfile.TemporaryDirectory(prefix="switchyard-check-")
+            data_dir = Path(self.temp_dir.name) / "data"
+        else:
+            self.temp_dir = None
+            Path(data_dir).mkdir(parents=True, exist_ok=True)
+        self.data_dir = Path(data_dir)
         env = dict(os.environ)
         env["PYTHONPATH"] = str(SRC_DIR)
         self.process = subprocess.Popen(
@@ -125,7 +131,8 @@ class RunningServer:
                 self.process.wait(timeout=5)
         if self.process.stdout:
             self.process.stdout.close()
-        self.temp_dir.cleanup()
+        if self.temp_dir is not None and self._cleanup:
+            self.temp_dir.cleanup()
 
     def output(self) -> str:
         if self.process.stdout is None:

@@ -40,13 +40,15 @@ def advance_run(app: YardApplication, run_code: str, payload: Any) -> dict[str, 
                 shift_code,
                 EventKind.PULL_RUN_STARTED,
                 f"pull run {run_code} started",
-                {"total_steps": len(run.steps)},
+                {"run_code": run_code, "outbound_code": run.outbound_code, "total_steps": len(run.steps)},
             )
         )
     executed = 0
+    executed_steps: list[dict[str, str]] = []
     while executed < requested_steps and run.current_step < len(run.steps):
         step = run.steps[run.current_step]
         execute_step(workspace, run, step)
+        executed_steps.append(step.to_dict())
         run.current_step += 1
         executed += 1
     outbound = workspace.outbounds.get(run.outbound_code)
@@ -68,7 +70,10 @@ def advance_run(app: YardApplication, run_code: str, payload: Any) -> dict[str, 
                 EventKind.PULL_RUN_COMPLETED,
                 f"pull run {run_code} completed",
                 {
+                    "run_code": run_code,
+                    "outbound_code": run.outbound_code,
                     "assembled_car_codes": list(outbound.assembled_car_codes),
+                    "executed_steps": executed_steps,
                     "steps": len(run.steps),
                 },
             )
@@ -80,8 +85,12 @@ def advance_run(app: YardApplication, run_code: str, payload: Any) -> dict[str, 
                 EventKind.PULL_RUN_ADVANCED,
                 f"pull run {run_code} advanced {executed} steps",
                 {
+                    "run_code": run_code,
+                    "outbound_code": run.outbound_code,
                     "current_step": run.current_step,
                     "remaining": run.remaining(),
+                    "executed": executed,
+                    "executed_steps": executed_steps,
                 },
             )
         )
@@ -117,13 +126,20 @@ def depart_outbound(app: YardApplication, outbound_code: str) -> dict[str, Any]:
     departed_at = now_iso()
     transition_outbound(outbound, OutboundState.DEPARTED)
     outbound.departed_at = departed_at
-    for code in outbound.assembled_car_codes:
+    departed_codes = list(outbound.assembled_car_codes)
+    for code in departed_codes:
         transition_car(workspace.cars[code], CarState.DEPARTED)
     event = workspace.record_event(
         shift_code,
         EventKind.TRAIN_DEPARTED,
         f"outbound {outbound.code} departed for {outbound.destination}",
-        {"car_count": len(outbound.assembled_car_codes), "departed_at": departed_at},
+        {
+            "outbound_code": outbound.code,
+            "destination": outbound.destination,
+            "car_count": len(departed_codes),
+            "car_codes": departed_codes,
+            "departed_at": departed_at,
+        },
     )
     app.commit(workspace, event)
     return {

@@ -52,7 +52,8 @@ def classify_intake(
             unplaced.append(code)
             continue
         if car.state != CarState.RECEIVED:
-            unplaced.append(code)
+            # Cars already placed by an earlier classification attempt stay
+            # placed; only cars still awaiting classification can be unplaced.
             continue
         ranked = _ranked_candidates(car, cars, tracks)
         target = ranked[0] if ranked else None

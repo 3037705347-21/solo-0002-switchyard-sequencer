@@ -190,12 +190,57 @@ def parse_transfer_code(raw: Any) -> str:
     return transfer
 
 
+def parse_optional_sequence(raw: Any, field_name: str) -> int | None:
+    """Parse an inclusive event-sequence bound used by read-only range views."""
+    if raw is None or raw == "":
+        return None
+    if isinstance(raw, bool) or not isinstance(raw, int):
+        try:
+            raw = int(str(raw))
+        except (TypeError, ValueError) as exc:
+            raise ValidationError(
+                f"{field_name} must be a positive integer",
+                **{field_name: ["expected a positive event sequence"]},
+            ) from exc
+    if raw < 1:
+        raise ValidationError(
+            f"{field_name} must be a positive integer",
+            **{field_name: ["must be >= 1"]},
+        )
+    return raw
+
+
+def parse_metrics_query(query: dict[str, Any]) -> dict[str, int | None | bool]:
+    from_sequence = parse_optional_sequence(query.get("from_sequence") or query.get("from"), "from_sequence")
+    to_sequence = parse_optional_sequence(query.get("to_sequence") or query.get("to"), "to_sequence")
+    if (
+        from_sequence is not None
+        and to_sequence is not None
+        and from_sequence > to_sequence
+    ):
+        raise ValidationError(
+            "invalid event range",
+            **{"from_sequence": ["must be <= to_sequence"]},
+        )
+    include_events = True
+    raw_events = query.get("include_events")
+    if raw_events is not None and str(raw_events).strip().lower() in {"0", "false", "no"}:
+        include_events = False
+    return {
+        "from_sequence": from_sequence,
+        "to_sequence": to_sequence,
+        "include_events": include_events,
+    }
+
+
 __all__ = [
     "build_intake_payload",
     "build_outbound_payload",
     "build_shift_payload",
     "parse_advance_steps",
     "parse_car_input",
+    "parse_metrics_query",
+    "parse_optional_sequence",
     "parse_transfer_code",
     "require_integer",
     "require_object",

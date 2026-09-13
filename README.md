@@ -28,6 +28,7 @@ PYTHONPATH=src python3 checks/wf_intake_classify.py
 PYTHONPATH=src python3 checks/wf_outbound_sequence.py
 PYTHONPATH=src python3 checks/wf_pull_depart.py
 PYTHONPATH=src python3 checks/wf_close_shift.py
+PYTHONPATH=src python3 checks/wf_shift_metrics.py
 ```
 
 Each check starts an isolated server on a free port with a temporary data
@@ -67,6 +68,29 @@ POST /api/pull-runs/RUN-01/advance
 POST /api/outbound-trains/OB-01/depart
 POST /api/shifts/SHIFT-01/close
 GET  /api/yard
+```
+
+## Shift work metrics
+
+`GET /api/shifts/{code}/work-metrics` is a read-only shift operations view.
+It is derived entirely from the append-only event trail (ordered by stable
+event sequence) and persisted object timestamps; querying it never records an
+event or mutates state. Optional `from_sequence` / `to_sequence` query
+parameters bound an inclusive event range, and `include_events=false` omits
+the raw events. Occupancy is reconstructed by replay, so a mid-shift range
+shows the correct pre-window baseline instead of starting from zero.
+
+The document reports receive-to-classify, classify-to-assemble,
+plan-to-complete, and plan-to-depart durations, pull completion rate, average
+buffer counts, repeated/duplicate attempts (blocked closures, classification
+reattempts, extra pull execution batches), and track / transfer-bay /
+destination occupancy deltas. Missing optional timestamps surface as `null`
+and never participate in averages or get counted as zero; the same event
+batch always produces the same document, including across restarts.
+
+```text
+GET /api/shifts/SHIFT-01/work-metrics
+GET /api/shifts/SHIFT-01/work-metrics?from_sequence=12&to_sequence=20
 ```
 
 Request and response examples are embedded in the project specification and in
