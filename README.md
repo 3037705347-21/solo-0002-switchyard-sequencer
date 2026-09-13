@@ -27,6 +27,7 @@ workflow checks exercise the real HTTP API:
 PYTHONPATH=src python3 checks/wf_intake_classify.py
 PYTHONPATH=src python3 checks/wf_outbound_sequence.py
 PYTHONPATH=src python3 checks/wf_pull_depart.py
+PYTHONPATH=src python3 checks/wf_yard_inventory.py
 PYTHONPATH=src python3 checks/wf_close_shift.py
 ```
 
@@ -71,3 +72,27 @@ GET  /api/yard
 
 Request and response examples are embedded in the project specification and in
 the workflow checks.
+
+## Yard inventory detail
+
+`GET /api/yard` keeps its original `metrics`, `blockers`, `active_shift`, and
+`shifts` fields and additionally returns an `inventory` object built directly
+from the persisted workspace (never inferred from action history). It lists
+every standing track stack, the X1 transfer bay, and each outbound consist in
+**bottom-to-top** reading order (`from_bottom`/`from_top` positions included),
+and partitions every car into mutually exclusive physical buckets:
+
+- `on_tracks`: cars sitting in a standing track stack. Reserved cars that have
+  not been pulled yet stay here and are flagged with `reserved` and
+  `reserved_for` instead of being counted twice;
+- `in_buffers`: cars parked in X1 mid pull-run (still `STANDING` by car state);
+- `assembled`: cars already mounted on an outbound train consist
+  (`outbound_trains[].assembled_cars`, with not-yet-pulled planned cars listed
+  under `pending_cars`);
+- `pending_intake`, `departed`, `removed`: received-but-unclassified cars and
+  cars no longer physically in the yard.
+
+`inventory.buckets` always sums to `inventory.total_cars`, and `anomalies`
+reports any state/location disagreement found while reconciling the single-car
+records against the containers, so detail, summary counts, and individual car
+state can be cross-checked after a service restart.

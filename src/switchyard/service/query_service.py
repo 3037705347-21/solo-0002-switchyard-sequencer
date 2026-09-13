@@ -6,6 +6,7 @@ from typing import Any
 
 from ..domain.enums import EventKind
 from ..domain.errors import NotFoundError
+from ..report.inventory import yard_inventory
 from ..report.summary import build_summary
 from .context import YardApplication
 
@@ -19,6 +20,7 @@ def yard_view(app: YardApplication) -> dict[str, Any]:
         "active_shift": active_shift,
         "metrics": summary["metrics"],
         "blockers": summary["blockers"],
+        "inventory": yard_inventory(workspace),
         "shifts": [shift.to_dict() for shift in workspace.shifts.values()],
     }
 
