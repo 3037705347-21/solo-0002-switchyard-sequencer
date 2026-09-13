@@ -7,7 +7,7 @@ from typing import Any
 from ..domain.car import FreightCar
 from ..domain.intake import IntakeTrain
 from ..domain.outbound import OutboundTrain
-from ..domain.pull import PullRun, YardEvent
+from ..domain.pull import AdvanceReceipt, PullRun, YardEvent, receipt_key
 from ..domain.shift import YardShift
 from ..domain.track import BufferBay, StandingTrack
 
@@ -26,6 +26,7 @@ def encode_workspace(workspace: Any) -> dict[str, Any]:
         "shifts": [shift.to_dict() for shift in workspace.shifts.values()],
         "events": [event.to_dict() for event in workspace.events],
         "closure_snapshots": workspace.closure_snapshots,
+        "advance_receipts": [receipt.to_dict() for receipt in workspace.advance_receipts.values()],
     }
 
 
@@ -40,6 +41,7 @@ def decode_workspace(raw: dict[str, Any]) -> Any:
     runs = {str(item["code"]): PullRun.from_dict(item) for item in raw.get("pull_runs", [])}
     shifts = {str(item["code"]): YardShift.from_dict(item) for item in raw.get("shifts", [])}
     events = [YardEvent.from_dict(item) for item in raw.get("events", [])]
+    receipts = [AdvanceReceipt.from_dict(dict(item)) for item in raw.get("advance_receipts", [])]
     workspace = YardWorkspace(
         tracks=tracks,
         buffer_bays=bays,
@@ -49,6 +51,7 @@ def decode_workspace(raw: dict[str, Any]) -> Any:
         runs=runs,
         shifts=shifts,
         events=events,
+        advance_receipts={receipt_key(item.run_code, item.request_id): item for item in receipts},
     )
     workspace.schema_version = int(raw.get("schema_version", workspace.schema_version))
     workspace.version = int(raw.get("version", 1))

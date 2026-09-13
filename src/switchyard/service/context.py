@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import threading
 from pathlib import Path
 
 from ..storage.repository import YardRepository
@@ -12,6 +13,7 @@ class YardApplication:
     def __init__(self, data_dir: Path | str):
         self.data_dir = Path(data_dir)
         self.repository = YardRepository(self.data_dir)
+        self.lock = threading.RLock()
 
     def load(self) -> YardWorkspace:
         return self.repository.load()

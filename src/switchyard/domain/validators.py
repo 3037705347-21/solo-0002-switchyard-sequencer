@@ -174,12 +174,25 @@ def build_shift_payload(raw: Any) -> tuple[str, str, str]:
     return code, dispatcher, opened
 
 
-def parse_advance_steps(raw: Any) -> int:
+def parse_advance_request(raw: Any) -> tuple[int, str | None]:
     body = require_object(raw, "payload")
     steps = body.get("steps", 1)
     if steps is None:
-        return 1
-    return require_integer(steps, "steps", 1, 200)
+        steps = 1
+    count = require_integer(steps, "steps", 1, 200)
+    return count, _parse_request_id(body.get("request_id"))
+
+
+def _parse_request_id(raw: Any) -> str | None:
+    if raw is None:
+        return None
+    value = require_text(raw, "request_id", 80)
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:-]*", value):
+        raise ValidationError(
+            "invalid request_id",
+            **{"request_id": ["use letters, digits, and '-', '_', '.', ':' separators"]},
+        )
+    return value
 
 
 def parse_transfer_code(raw: Any) -> str:
@@ -194,7 +207,7 @@ __all__ = [
     "build_intake_payload",
     "build_outbound_payload",
     "build_shift_payload",
-    "parse_advance_steps",
+    "parse_advance_request",
     "parse_car_input",
     "parse_transfer_code",
     "require_integer",

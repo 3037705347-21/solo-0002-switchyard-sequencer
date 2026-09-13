@@ -66,12 +66,24 @@ planned cars, and moves the outbound train into a planned state.
 Entry: `POST /api/pull-runs/{code}/advance`,
 `POST /api/outbound-trains/{code}/depart`
 
-The crew lead advances the pull run one action at a time. Each advance verifies
-the current track top, the buffer state, and the car reservation before
-changing locations. Buffer cars are parked and later returned, planned cars are
-appended to the outbound assembled consist, and the run completes only when the
-assembled sequence matches the planned sequence. The dispatcher can then mark
-the train departed and move its cars into the departed state.
+The crew lead advances the pull run one action at a time or in batches. Each
+advance verifies the current track top, the buffer state, and the car
+reservation before changing locations. Buffer cars are parked and later
+returned, planned cars are appended to the outbound assembled consist, and the
+run completes only when the assembled sequence matches the planned sequence.
+The dispatcher can then mark the train departed and move its cars into the
+departed state.
+
+The advance endpoint accepts an optional `request_id` so field retries stay
+safe. The first submission executes and the service records an advance
+receipt; resubmitting the same `request_id` for the same run replays the
+recorded outcome (`"replayed": true`) without moving cars again. Every advance
+response lists the steps executed by this call plus before/after run snapshots
+and the remaining step count. When a step is blocked by a resource conflict
+mid-batch, the steps already executed are committed as a clear boundary, the
+run stays resumable, and the error details carry the boundary, the failed
+step, and the executed steps; a later request with a new `request_id` resumes
+from that boundary.
 
 ### 4. Close a shift with a yard balance
 
@@ -129,7 +141,8 @@ workspace snapshot and never mutate it.
 - `POST /api/intake-trains/{code}/classify`: place cars on standing tracks.
 - `POST /api/outbound-trains`: create an outbound train.
 - `POST /api/outbound-trains/{code}/sequencer`: create a pull run.
-- `POST /api/pull-runs/{code}/advance`: execute the next pull actions.
+- `POST /api/pull-runs/{code}/advance`: execute the next pull actions;
+  optional `request_id` makes the batch idempotent and replayable.
 - `POST /api/outbound-trains/{code}/depart`: mark an assembled train departed.
 - `POST /api/shifts/{code}/close`: create a closure snapshot.
 - `GET /api/yard`: return the full yard view.

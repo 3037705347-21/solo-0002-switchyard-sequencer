@@ -51,7 +51,12 @@
       "success": "the intake train is classified and every compatible car is standing on a track",
       "failure": "invalid codes, duplicate cars, or full incompatible tracks produce a stable error",
       "verification": "workflow check creates a shift and classifies a four-car intake through the HTTP API",
-      "module_ids": ["entry", "service", "domain", "storage"]
+      "module_ids": [
+        "entry",
+        "service",
+        "domain",
+        "storage"
+      ]
     },
     {
       "id": "plan-outbound-pull",
@@ -65,7 +70,12 @@
       "success": "the sequencer returns a pull run and marks the outbound train planned",
       "failure": "unavailable cars, wrong destination, or impossible stack access produce a planning error",
       "verification": "workflow check plans an outbound consist and verifies the generated pull actions",
-      "module_ids": ["entry", "service", "domain", "storage"]
+      "module_ids": [
+        "entry",
+        "service",
+        "domain",
+        "storage"
+      ]
     },
     {
       "id": "execute-pull-depart",
@@ -73,13 +83,19 @@
       "entry": "POST /api/pull-runs/{code}/advance and POST /api/outbound-trains/{code}/depart",
       "steps": [
         "advance the pull run through buffer and return actions",
+        "record an advance receipt per request identity so retries replay",
         "append planned cars to the assembled consist",
         "complete the run and mark the outbound train departed"
       ],
       "success": "the assembled consist matches the planned consist and the train departs",
-      "failure": "a mismatched stack top or unreserved car fails the current action",
-      "verification": "workflow check executes every pull action and verifies train departure",
-      "module_ids": ["entry", "service", "domain", "storage"]
+      "failure": "a mismatched stack top or occupied bay blocks the batch at a committed boundary",
+      "verification": "workflow checks execute pull actions to departure and verify idempotent replay, per-step outcomes, and blocked-batch boundaries",
+      "module_ids": [
+        "entry",
+        "service",
+        "domain",
+        "storage"
+      ]
     },
     {
       "id": "close-shift-balance",
@@ -93,7 +109,13 @@
       "success": "a clean yard state produces a snapshot and the shift becomes closed",
       "failure": "open work or an occupied maintenance track prevents closure",
       "verification": "workflow check closes a shift and verifies the returned yard balance",
-      "module_ids": ["entry", "service", "domain", "storage", "report"]
+      "module_ids": [
+        "entry",
+        "service",
+        "domain",
+        "storage",
+        "report"
+      ]
     }
   ]
 }

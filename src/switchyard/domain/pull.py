@@ -3,9 +3,17 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import Any
 
 from .enums import EventKind, MoveVerb, RunState
 from .timeutil import now_iso
+
+RECEIPT_OK = "ok"
+RECEIPT_ERROR = "error"
+
+
+def receipt_key(run_code: str, request_id: str) -> str:
+    return f"{run_code}::{request_id}"
 
 
 @dataclass(slots=True)
@@ -86,6 +94,45 @@ class PullRun:
 
 
 @dataclass(slots=True)
+class AdvanceReceipt:
+    """Recorded outcome of one advance request identity.
+
+    A receipt makes an advance batch idempotent: resubmitting the same
+    request_id for the same run replays the recorded outcome instead of
+    moving cars again.
+    """
+
+    request_id: str
+    run_code: str
+    outcome: str
+    response: dict[str, Any] = field(default_factory=dict)
+    error: dict[str, Any] | None = None
+    recorded_at: str = field(default_factory=now_iso)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "request_id": self.request_id,
+            "run_code": self.run_code,
+            "outcome": self.outcome,
+            "response": self.response,
+            "error": self.error,
+            "recorded_at": self.recorded_at,
+        }
+
+    @classmethod
+    def from_dict(cls, raw: dict[str, Any]) -> "AdvanceReceipt":
+        error = raw.get("error")
+        return cls(
+            request_id=str(raw["request_id"]),
+            run_code=str(raw["run_code"]),
+            outcome=str(raw.get("outcome", RECEIPT_OK)),
+            response={str(key): value for key, value in dict(raw.get("response", {})).items()},
+            error=None if error is None else {str(key): value for key, value in dict(error).items()},
+            recorded_at=str(raw.get("recorded_at", "")),
+        )
+
+
+@dataclass(slots=True)
 class YardEvent:
     sequence: int
     at: str
@@ -116,4 +163,12 @@ class YardEvent:
         )
 
 
-__all__ = ["MoveStep", "PullRun", "YardEvent"]
+__all__ = [
+    "RECEIPT_ERROR",
+    "RECEIPT_OK",
+    "AdvanceReceipt",
+    "MoveStep",
+    "PullRun",
+    "YardEvent",
+    "receipt_key",
+]

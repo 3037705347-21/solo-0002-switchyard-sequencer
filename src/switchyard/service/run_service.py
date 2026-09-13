@@ -5,12 +5,23 @@ from __future__ import annotations
 from typing import Any
 
 from ..domain.enums import CarState, EventKind, OutboundState, RunState
-from ..domain.errors import ConflictError, NotFoundError, ResourceBusyError, ValidationError
+from ..domain.errors import (
+    ConflictError,
+    DomainError,
+    NotFoundError,
+    ResourceBusyError,
+    StateTransitionError,
+    ValidationError,
+)
 from ..domain.executor import execute_step
+from ..domain.pull import RECEIPT_ERROR, RECEIPT_OK, AdvanceReceipt, PullRun, receipt_key
 from ..domain.timeutil import now_iso
 from ..domain.transitions import transition_car, transition_outbound, transition_run
-from ..domain.validators import parse_advance_steps
+from ..domain.validators import parse_advance_request
 from .context import YardApplication
+
+# Step failures that leave a resumable boundary instead of failing the run.
+BLOCKED_STEP_ERRORS = (ResourceBusyError, StateTransitionError)
 
 
 def _ensure_shift_open(workspace: Any) -> str:
@@ -20,17 +31,71 @@ def _ensure_shift_open(workspace: Any) -> str:
     raise ResourceBusyError("no open shift", message_hint="open a shift before moving cars")
 
 
+def _run_snapshot(run: PullRun, outbound: Any) -> dict[str, Any]:
+    return {
+        "run_state": str(run.state),
+        "current_step": run.current_step,
+        "remaining": run.remaining(),
+        "assembled_car_codes": list(outbound.assembled_car_codes),
+    }
+
+
+def _replay_receipt(receipt: AdvanceReceipt) -> dict[str, Any]:
+    if receipt.outcome == RECEIPT_OK:
+        return {**receipt.response, "replayed": True}
+    record = receipt.error or {}
+    details = dict(record.get("details", {}))
+    details["replayed"] = True
+    raise DomainError(
+        str(record.get("message", "advance request already recorded")),
+        code=str(record.get("code", "RESOURCE_BUSY")),
+        status=409,
+        payload=details,
+    )
+
+
+def _blocked_details(run: PullRun, executed: list[dict[str, Any]], request_id: str | None) -> dict[str, Any]:
+    failed_step = run.steps[run.current_step]
+    return {
+        "run_code": run.code,
+        "request_id": request_id,
+        "executed_steps": len(executed),
+        "steps_executed": executed,
+        "failed_step": {"index": run.current_step, **failed_step.to_dict()},
+        "boundary": {
+            "run_state": str(run.state),
+            "current_step": run.current_step,
+            "remaining": run.remaining(),
+        },
+        "resume_hint": "resubmit with a new request_id to resume from the executed boundary",
+    }
+
+
 def advance_run(app: YardApplication, run_code: str, payload: Any) -> dict[str, Any]:
-    requested_steps = parse_advance_steps(payload)
+    requested_steps, request_id = parse_advance_request(payload)
+    with app.lock:
+        return _advance_locked(app, run_code, requested_steps, request_id)
+
+
+def _advance_locked(app: YardApplication, run_code: str, requested_steps: int, request_id: str | None) -> dict[str, Any]:
     workspace = app.load()
-    shift_code = _ensure_shift_open(workspace)
     run = workspace.runs.get(run_code)
     if run is None:
         raise NotFoundError("pull run", run_code)
+    key = receipt_key(run_code, request_id) if request_id is not None else None
+    if key is not None:
+        receipt = workspace.advance_receipts.get(key)
+        if receipt is not None:
+            return _replay_receipt(receipt)
+    shift_code = _ensure_shift_open(workspace)
     if run.state == RunState.COMPLETED:
         raise ConflictError("pull run is already complete", code=run_code)
     if run.state == RunState.FAILED:
         raise ConflictError("pull run has failed", code=run_code)
+    outbound = workspace.outbounds.get(run.outbound_code)
+    if outbound is None:
+        raise NotFoundError("outbound train", run.outbound_code)
+    before = _run_snapshot(run, outbound)
     events: list[Any] = []
     if run.state == RunState.QUEUED:
         transition_run(run, RunState.RUNNING)
@@ -43,15 +108,27 @@ def advance_run(app: YardApplication, run_code: str, payload: Any) -> dict[str, 
                 {"total_steps": len(run.steps)},
             )
         )
-    executed = 0
-    while executed < requested_steps and run.current_step < len(run.steps):
+    run.error = None
+    executed: list[dict[str, Any]] = []
+    blocked: DomainError | None = None
+    while len(executed) < requested_steps and run.current_step < len(run.steps):
         step = run.steps[run.current_step]
-        execute_step(workspace, run, step)
+        try:
+            detail = execute_step(workspace, run, step)
+        except BLOCKED_STEP_ERRORS as exc:
+            blocked = exc
+            break
+        executed.append(
+            {
+                "index": run.current_step,
+                "verb": str(step.verb),
+                "car_code": step.car_code,
+                "source_code": step.source_code,
+                "target_code": step.target_code,
+                "detail": detail,
+            }
+        )
         run.current_step += 1
-        executed += 1
-    outbound = workspace.outbounds.get(run.outbound_code)
-    if outbound is None:
-        raise NotFoundError("outbound train", run.outbound_code)
     completed = run.current_step >= len(run.steps)
     if completed:
         if not outbound.assembly_complete():
@@ -73,25 +150,71 @@ def advance_run(app: YardApplication, run_code: str, payload: Any) -> dict[str, 
                 },
             )
         )
+    elif blocked is not None:
+        run.error = str(blocked)
+        events.append(
+            workspace.record_event(
+                shift_code,
+                EventKind.PULL_RUN_BLOCKED,
+                f"pull run {run_code} blocked at step {run.current_step}: {blocked}",
+                {
+                    "executed_steps": len(executed),
+                    "current_step": run.current_step,
+                    "remaining": run.remaining(),
+                    "blocked_by": str(blocked),
+                },
+            )
+        )
     else:
         events.append(
             workspace.record_event(
                 shift_code,
                 EventKind.PULL_RUN_ADVANCED,
-                f"pull run {run_code} advanced {executed} steps",
+                f"pull run {run_code} advanced {len(executed)} steps",
                 {
                     "current_step": run.current_step,
                     "remaining": run.remaining(),
                 },
             )
         )
-    app.commit(workspace, events)
-    return {
+    response = {
         "pull_run": run.to_dict(),
         "outbound": outbound.to_dict(),
-        "executed_steps": executed,
+        "executed_steps": len(executed),
         "completed": completed,
+        "request_id": request_id,
+        "replayed": False,
+        "steps_executed": executed,
+        "before": before,
+        "after": _run_snapshot(run, outbound),
+        "remaining": run.remaining(),
     }
+    if blocked is not None:
+        blocked.payload.update(_blocked_details(run, executed, request_id))
+    if key is not None:
+        if blocked is None:
+            receipt = AdvanceReceipt(
+                request_id=request_id,
+                run_code=run_code,
+                outcome=RECEIPT_OK,
+                response=response,
+            )
+        else:
+            receipt = AdvanceReceipt(
+                request_id=request_id,
+                run_code=run_code,
+                outcome=RECEIPT_ERROR,
+                error={
+                    "code": blocked.code,
+                    "message": str(blocked),
+                    "details": dict(blocked.payload),
+                },
+            )
+        workspace.advance_receipts[key] = receipt
+    app.commit(workspace, events)
+    if blocked is not None:
+        raise blocked
+    return response
 
 
 def depart_outbound(app: YardApplication, outbound_code: str) -> dict[str, Any]:

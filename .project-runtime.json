@@ -3,7 +3,9 @@
   "name": "switchyard-sequencer",
   "language": "python",
   "project_shape": "backend",
-  "source_extensions": [".py"],
+  "source_extensions": [
+    ".py"
+  ],
   "build_command": "python3 -m compileall -q src checks",
   "testing": "deferred",
   "workflow_checks": [
@@ -22,6 +24,10 @@
     {
       "workflow_id": "close-shift-balance",
       "command": "PYTHONPATH=src python3 checks/wf_close_shift.py"
+    },
+    {
+      "workflow_id": "execute-pull-depart-idempotency",
+      "command": "PYTHONPATH=src python3 checks/wf_advance_idempotency.py"
     }
   ]
 }

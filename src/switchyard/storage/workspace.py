@@ -27,6 +27,7 @@ class YardWorkspace:
     shifts: dict[str, Any] = field(default_factory=dict)
     events: list[YardEvent] = field(default_factory=list)
     closure_snapshots: list[dict[str, Any]] = field(default_factory=list)
+    advance_receipts: dict[str, Any] = field(default_factory=dict)
 
     def bump(self) -> None:
         self.version += 1

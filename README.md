@@ -28,10 +28,25 @@ PYTHONPATH=src python3 checks/wf_intake_classify.py
 PYTHONPATH=src python3 checks/wf_outbound_sequence.py
 PYTHONPATH=src python3 checks/wf_pull_depart.py
 PYTHONPATH=src python3 checks/wf_close_shift.py
+PYTHONPATH=src python3 checks/wf_advance_idempotency.py
 ```
 
 Each check starts an isolated server on a free port with a temporary data
 directory and stops the server before exiting.
+
+## Idempotent pull-run advancement
+
+`POST /api/pull-runs/{code}/advance` accepts `{"steps": N, "request_id": "..."}`
+(`steps` defaults to 1, `request_id` is optional). The response lists
+`steps_executed` (index, verb, car, source, target per step), `before`/`after`
+run snapshots, and the `remaining` step count. Submitting the same
+`request_id` again replays the recorded outcome with `"replayed": true` and
+moves nothing, so network retries and double submissions are safe; the
+recorded outcome is returned regardless of the retried `steps` value. If a
+batch hits a resource conflict mid-way, the executed steps are committed as
+the resumable boundary and the 409 error details carry the boundary, the
+failed step, and what executed; send a new `request_id` to resume once the
+blocker clears.
 
 ## Directory structure
 
