@@ -6,7 +6,7 @@ import json
 from pathlib import Path
 from typing import Any
 
-from .atomicfile import append_text_line, read_json_if_present
+from .atomicfile import append_text_line
 
 
 class EventJournal:
@@ -17,13 +17,18 @@ class EventJournal:
         append_text_line(self.path, json.dumps(payload, ensure_ascii=False, sort_keys=True))
 
     def read_all(self) -> list[dict[str, Any]]:
-        value = read_json_if_present(self.path)
-        if not isinstance(value, list):
-            if not self.path.is_file():
-                return []
-            lines = self.path.read_text(encoding="utf-8").splitlines()
-            return [json.loads(line) for line in lines if line.strip()]
-        return value
+        if not self.path.is_file():
+            return []
+        text = self.path.read_text(encoding="utf-8")
+        stripped = text.strip()
+        if not stripped:
+            return []
+        if stripped[0] == "[":
+            value = json.loads(stripped)
+            if not isinstance(value, list):
+                raise ValueError(f"journal {self.path} JSON payload is not a list")
+            return [dict(item) for item in value if isinstance(item, dict)]
+        return [json.loads(line) for line in text.splitlines() if line.strip()]
 
 
 __all__ = ["EventJournal"]

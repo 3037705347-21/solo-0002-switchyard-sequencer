@@ -113,14 +113,32 @@ view for verification.
   storage, and report modules.
 - `domain`: enums, entities, validation, state transitions, allocation rules,
   pull sequencing, and domain errors.
-- `storage`: workspace model, atomic persistence, seed tracks, and event
-  journaling.
+- `storage`: workspace model, atomic persistence, seed tracks, event
+  journaling, and offline backup / validation / migration / restore.
 - `report`: yard metrics, closure validation, and deterministic summaries.
 
 Entry routes call service commands. Service commands load the persisted
 workspace, apply domain operations, and commit only after the operation
 succeeds. Domain modules never read files. Report modules compute from a
 workspace snapshot and never mutate it.
+
+### Backup, validation, migration, and restore
+
+The `storage.backup` module exports a live data directory as a zip packet with
+a `manifest.json` (packet format version, export time, event range, and
+per-file SHA-256 digests and sizes) plus the state file and event journal.
+Inspection runs entirely in an isolated staging directory and has four layers:
+packet integrity, field readability through the normal codec, legacy migration,
+and basic consistency (gap-free event sequences, the journal prefixing the
+state events with byte-identical records, and resolved cross-entity
+references). The `storage.migration` module upgrades schema v0 data with a
+previewable list of renames; values without a safe mapping return a blocking
+reason. The `storage.restore` module refuses a target that already holds
+running state unless replacement is explicitly allowed, and commits a validated
+packet through a directory-level atomic rename with a rollback rename, so a
+restore either completes fully or leaves the target directory untouched. The
+`switchyard.entry.backup_cli` module exposes `backup`, `inspect`,
+`migrate-preview`, and `restore` commands.
 
 ## Public interfaces
 

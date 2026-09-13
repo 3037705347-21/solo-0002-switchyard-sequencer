@@ -33,6 +33,44 @@ PYTHONPATH=src python3 checks/wf_close_shift.py
 Each check starts an isolated server on a free port with a temporary data
 directory and stops the server before exiting.
 
+## Yard backup and migration
+
+The storage layer also ships an offline backup, validation and restore tool so
+a damaged data directory can be recovered or migrated without copying the JSON
+files by hand. A packet is a single zip archive containing `manifest.json`,
+`yard-state.json`, and `events.jsonl`. The manifest records the packet format
+version, export time, event range (count and first/last sequence), and a
+SHA-256 digest plus byte size for every member.
+
+```bash
+PYTHONPATH=src python3 -m switchyard.entry.backup_cli backup   --data-dir data/dev --output yard.sypack
+PYTHONPATH=src python3 -m switchyard.entry.backup_cli inspect  yard.sypack
+PYTHONPATH=src python3 -m switchyard.entry.backup_cli migrate-preview yard-state-v0.json --journal events-v0.jsonl
+PYTHONPATH=src python3 -m switchyard.entry.backup_cli restore  yard.sypack --data-dir data/new
+```
+
+Restore always validates inside an isolated staging directory first: packet
+integrity (zip CRC, sizes, digests), field readability (every entity decodes
+through the same codec as live loads), legacy migration preview, and basic
+state/event consistency (gap-free event sequences, journal prefixes the state
+events, and cross-entity references resolve). A target directory that already
+holds running state is refused unless `--replace-existing` is given. Only a
+fully valid packet is committed with a directory-level atomic rename; any
+failure rolls the old directory back, so the target is either completely
+restored or left exactly as it was. Schema v0 data is migrated to the current
+schema with a preview of every rename; values with no safe mapping are reported
+with an explicit non-migration reason instead of being guessed. Add `--json`
+for machine-readable output.
+
+```bash
+PYTHONPATH=src python3 checks/wf_backup_restore.py
+```
+
+That check drives normal packets, truncated/corrupted packets, legacy v0
+packets, and targets that already hold running state, then confirms shifts,
+cars, the event journal, and closure snapshots remain readable after restore.
+
+
 ## Directory structure
 
 ```text
