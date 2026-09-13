@@ -7,6 +7,7 @@ from typing import Any, Callable
 
 from ..domain.errors import DomainError, NotFoundError
 from ..service import (
+    certificate_service,
     closure_service,
     intake_service,
     outbound_service,
@@ -43,6 +44,8 @@ class Router:
             Route("POST", r"/api/shifts", self._open_shift),
             Route("GET", r"/api/shifts/(?P<code>[^/]+)", self._shift_view),
             Route("POST", r"/api/shifts/(?P<code>[^/]+)/close", self._close_shift),
+            Route("GET", r"/api/shifts/(?P<code>[^/]+)/closure-certificate", self._closure_certificate),
+            Route("POST", r"/api/shifts/(?P<code>[^/]+)/closure-certificate/verify", self._verify_certificate),
             Route("POST", r"/api/intake-trains", self._create_intake),
             Route("POST", r"/api/intake-trains/(?P<code>[^/]+)/classify", self._classify),
             Route("POST", r"/api/outbound-trains", self._create_outbound),
@@ -74,6 +77,12 @@ class Router:
 
     def _close_shift(self, body: Any, code: str) -> dict[str, Any]:
         return closure_service.close_shift(self.app, code)
+
+    def _closure_certificate(self, body: Any, code: str) -> dict[str, Any]:
+        return certificate_service.get_closure_certificate(self.app, code)
+
+    def _verify_certificate(self, body: Any, code: str) -> dict[str, Any]:
+        return certificate_service.verify_closure_certificate(self.app, code)
 
     def _create_intake(self, body: Any) -> dict[str, Any]:
         return intake_service.create_intake(self.app, body)

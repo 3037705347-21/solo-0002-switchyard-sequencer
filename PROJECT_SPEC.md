@@ -36,6 +36,9 @@ state as JSON files under a configurable data directory.
   from a validated outbound plan.
 - `ClosureSnapshot`: an immutable metric set and blocker list produced when a
   shift closes.
+- `ClosureCertificate`: a tamper-evident, write-once proof of a closed shift
+  holding the shift record, snapshot metrics, blocker result, event range, and
+  a content digest.
 
 ## Workflows
 
@@ -75,14 +78,23 @@ the train departed and move its cars into the departed state.
 
 ### 4. Close a shift with a yard balance
 
-Entry: `POST /api/shifts/{code}/close`, `GET /api/yard`
+Entry: `POST /api/shifts/{code}/close`, `GET /api/yard`,
+`GET /api/shifts/{code}/closure-certificate`,
+`POST /api/shifts/{code}/closure-certificate/verify`
 
 The shift lead requests closure. The service computes standing, reserved,
 assembled, and departed car totals plus track occupancy and open-train counts.
 It blocks closure when any intake is open, any run is queued or running, or any
 standing track is in maintenance with cars present. When the checks pass, it
 stores a `ClosureSnapshot`, records the closure event, and exposes the yard
-view for verification.
+view for verification. After the closure is committed, the service issues a
+`ClosureCertificate` with the shift record, snapshot metrics, blocker result,
+the shift event range (first/last sequence, count, per-event digests), and a
+content digest. Anyone can later verify the certificate against the persisted
+history; verification reports each inconsistent field or event range entry
+instead of a bare failure. Certificate issuance or read failures never affect
+an already committed closure, and verification never rewrites certificates or
+historical state.
 
 ## State and rules
 
@@ -105,6 +117,9 @@ view for verification.
   is not reserved elsewhere and the transfer bay has enough capacity.
 - Closure is derived from the persisted workspace and never mutates car or
   track state.
+- Closure certificates are write-once files; saving different content for an
+  already certified shift is rejected, and certificate verification is
+  read-only.
 
 ## Modules and dependency direction
 
@@ -113,9 +128,10 @@ view for verification.
   storage, and report modules.
 - `domain`: enums, entities, validation, state transitions, allocation rules,
   pull sequencing, and domain errors.
-- `storage`: workspace model, atomic persistence, seed tracks, and event
-  journaling.
-- `report`: yard metrics, closure validation, and deterministic summaries.
+- `storage`: workspace model, atomic persistence, seed tracks, event
+  journaling, and the write-once closure certificate store.
+- `report`: yard metrics, closure validation, closure certificate building and
+  verification, and deterministic summaries.
 
 Entry routes call service commands. Service commands load the persisted
 workspace, apply domain operations, and commit only after the operation
@@ -132,6 +148,10 @@ workspace snapshot and never mutate it.
 - `POST /api/pull-runs/{code}/advance`: execute the next pull actions.
 - `POST /api/outbound-trains/{code}/depart`: mark an assembled train departed.
 - `POST /api/shifts/{code}/close`: create a closure snapshot.
+- `GET /api/shifts/{code}/closure-certificate`: return the stored closure
+  certificate for a closed shift.
+- `POST /api/shifts/{code}/closure-certificate/verify`: compare the stored
+  certificate with the persisted history and report field-level mismatches.
 - `GET /api/yard`: return the full yard view.
 - `GET /api/shifts/{code}`: return shift details and recent events.
 

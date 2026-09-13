@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from .atomicfile import atomic_write_json, ensure_parent, read_json_if_present
+from .certificate_store import CertificateStore
 from .codec import decode_workspace, encode_workspace
 from .journal import EventJournal
 from .seed import build_seed_workspace
@@ -21,6 +22,7 @@ class YardRepository:
         self.journal_path = self.data_dir / JOURNAL_FILE
         ensure_parent(self.state_path)
         self.journal = EventJournal(self.journal_path)
+        self.certificates = CertificateStore(self.data_dir)
 
     def exists(self) -> bool:
         return self.state_path.is_file()

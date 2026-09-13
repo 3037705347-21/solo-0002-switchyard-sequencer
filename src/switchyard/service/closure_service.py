@@ -10,6 +10,7 @@ from ..domain.timeutil import now_iso
 from ..domain.transitions import transition_shift
 from ..report.closure import closure_blockers
 from ..report.summary import snapshot_document
+from . import certificate_service
 from .context import YardApplication
 
 
@@ -44,11 +45,17 @@ def close_shift(app: YardApplication, shift_code: str) -> dict[str, Any]:
         {"snapshot_code": snapshot_code, "closed_at": closed_at},
     )
     app.commit(workspace, event)
-    return {
+    result = {
         "shift": shift.to_dict(),
         "snapshot": document,
         "metrics": document["metrics"],
     }
+    try:
+        result["certificate"] = certificate_service.issue_closure_certificate(app, shift_code)
+    except Exception as exc:  # the closure is already committed; certificate issues must not break it
+        result["certificate"] = None
+        result["certificate_warning"] = f"closure certificate was not stored: {exc}"
+    return result
 
 
 __all__ = ["close_shift"]

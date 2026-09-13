@@ -28,6 +28,7 @@ PYTHONPATH=src python3 checks/wf_intake_classify.py
 PYTHONPATH=src python3 checks/wf_outbound_sequence.py
 PYTHONPATH=src python3 checks/wf_pull_depart.py
 PYTHONPATH=src python3 checks/wf_close_shift.py
+PYTHONPATH=src python3 checks/wf_closure_certificate.py
 ```
 
 Each check starts an isolated server on a free port with a temporary data
@@ -49,6 +50,23 @@ The repository stores one versioned workspace file plus an append-only event
 journal. Every write goes through a same-directory temporary file and an atomic
 replace, so interrupted writes do not leave partial state.
 
+## Closure certificates
+
+Closing a shift also issues a write-once closure certificate under
+`data/<env>/certificates/<shift>.json`. The certificate records the shift, the
+closure snapshot metrics and blocker result, the shift event range with
+per-event digests, and a content digest. Verification compares the stored
+certificate with the persisted history and reports each inconsistent field or
+event range entry:
+
+```text
+GET  /api/shifts/SHIFT-01/closure-certificate
+POST /api/shifts/SHIFT-01/closure-certificate/verify
+```
+
+Certificate issuance or read failures never undo a committed closure, and
+verification never rewrites certificates or historical state.
+
 ## Environment variables
 
 - `SWITCHYARD_PORT`: default service port, used when `--port` is absent.
@@ -66,6 +84,8 @@ POST /api/outbound-trains/OB-01/sequencer
 POST /api/pull-runs/RUN-01/advance
 POST /api/outbound-trains/OB-01/depart
 POST /api/shifts/SHIFT-01/close
+GET  /api/shifts/SHIFT-01/closure-certificate
+POST /api/shifts/SHIFT-01/closure-certificate/verify
 GET  /api/yard
 ```
 
