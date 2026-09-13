@@ -51,6 +51,12 @@ _PHASE_RANK = {
     "DEPARTED": 70,
 }
 
+# Causal ordering groups, independent of which evidence backs an entry.
+_GROUP_RECEIVED = 0
+_GROUP_CLASSIFIED = 1
+_GROUP_RUN = 2
+_GROUP_DEPARTED = 3
+
 # Entity timestamps and their journal events are written by the same command,
 # but a second boundary can make them differ by one second. Any larger skew
 # means the event and the entity describe different facts.
@@ -119,6 +125,7 @@ class _JourneyContext:
         self.outbounds = sorted(workspace.outbounds.values(), key=lambda item: (item.created_at, item.code))
         self.runs = sorted(workspace.runs.values(), key=lambda item: (item.created_at, item.code))
         self.events = sorted(workspace.events, key=lambda item: item.sequence)
+        self.event_by_seq = {event.sequence: event for event in self.events}
         self.receive_links = self._link_receive_events()
         self.classify_links = self._link_classify_events()
         self.run_links = self._link_run_events()
@@ -143,10 +150,9 @@ class _JourneyContext:
             self._run_entries(car_code, run, entries, gaps)
         self._departed_entry(car_code, related_outbounds, entries, gaps)
 
-        ordered = sorted(entries, key=_entry_sort_key)
-        for internal in ("_tier", "_seq", "_sub", "_fallback"):
-            for entry in ordered:
-                entry.pop(internal, None)
+        ordered = self._order_entries(entries)
+        for entry in ordered:
+            entry.pop("_order", None)
         for index, entry in enumerate(ordered):
             entry["index"] = index
 
@@ -164,6 +170,18 @@ class _JourneyContext:
             "evidence_gaps": gaps,
             "consistent": not flags and not gaps,
         }
+
+    # -- ordering ----------------------------------------------------------
+
+    def _order_entries(self, entries: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """Order by causal position, then journal sequence within a position."""
+
+        def key(entry: dict[str, Any]) -> tuple[Any, ...]:
+            order = entry["_order"]
+            seq = entry["event_sequence"] if entry["event_sequence"] is not None else 10**9
+            return (*order, seq)
+
+        return sorted(entries, key=key)
 
     # -- event linking -----------------------------------------------------
 
@@ -224,22 +242,22 @@ class _JourneyContext:
         return links
 
     def _link_run_events(self) -> dict[int, dict[str, Any]]:
-        """Assign run lifecycle events to runs under hard identity constraints.
+        """Globally match run lifecycle events to runs.
 
-        Run journal events carry no run code, so an event is attached only when
-        its owner is forced:
+        Completion events identify their run uniquely through the completed
+        consist. The remaining plan/start/advance events carry no run code, so
+        the matcher enumerates every assignment of those events to runs that is
 
-        * PULL_RUN_COMPLETED identifies the run through the exact completed
-          consist and step count, checked against the persisted run timestamp.
-        * PULL_PLANNED / PULL_RUN_STARTED / PULL_RUN_ADVANCED must fall inside
-          the plan < start < advance (strictly increasing cursor) < completion
-          sequence window of one run and match that run's fields/timestamps.
+        * one-to-one (each event belongs to at most one run),
+        * field-compatible (transfer, step count, cursor bounds),
+        * timestamp-compatible with the run record, and
+        * chronologically consistent per run
+          (plan < start < advances with strictly increasing cursor < completion).
 
-        Feasibility is solved to a fixed point by uniqueness (event with one
-        feasible run) and necessity (run that needs an event and has one
-        feasible event). Anything that stays ambiguous is left unassigned and
-        recorded on every still-feasible run as an evidence gap; it is never
-        guessed onto another car.
+        An event is bound only when it has the same owner in every consistent
+        assignment. Anything else stays unbound and is recorded on each run it
+        could belong to as an ambiguity gap; no run ever borrows another run's
+        start, advance, completion, or departure.
         """
 
         plans = self._events_of(EventKind.PULL_PLANNED)
@@ -266,100 +284,296 @@ class _JourneyContext:
         def bond(run: Any) -> dict[str, Any]:
             return bond_for[id(run)]
 
-        def assign(run: Any, kind: EventKind, event: Any) -> None:
-            run_bond = bond(run)
-            if kind == EventKind.PULL_PLANNED:
-                run_bond["plan"] = event
-            elif kind == EventKind.PULL_RUN_STARTED:
-                run_bond["started"] = event
-            elif kind == EventKind.PULL_RUN_ADVANCED:
-                run_bond["advances"].append(event)
-            else:
-                run_bond["completed"] = event
-
-        # Completion anchors: identity by completed consist + step count.
-        unassigned = {
-            EventKind.PULL_PLANNED: list(plans),
-            EventKind.PULL_RUN_STARTED: list(starts),
-            EventKind.PULL_RUN_ADVANCED: list(advances),
-            EventKind.PULL_RUN_COMPLETED: list(completions),
-        }
-
-        for event in list(unassigned[EventKind.PULL_RUN_COMPLETED]):
+        # Completion anchors: identity by exact completed consist.
+        for event in completions:
             candidates = self._completion_candidates(event, bond)
             if len(candidates) == 1:
-                assign(candidates[0], EventKind.PULL_RUN_COMPLETED, event)
-                unassigned[EventKind.PULL_RUN_COMPLETED].remove(event)
+                bond(candidates[0])["completed"] = event
             else:
                 for run in candidates:
                     bond(run)["ambiguous"][EventKind.PULL_RUN_COMPLETED].append(event)
 
-        kinds = (
-            EventKind.PULL_PLANNED,
-            EventKind.PULL_RUN_STARTED,
-            EventKind.PULL_RUN_ADVANCED,
+        runs = list(self.runs)
+        plan_compat = {event.sequence: self._plan_compatible_runs(event, bond) for event in plans}
+        start_compat = {event.sequence: self._start_compatible_runs(event, bond) for event in starts}
+        advance_compat = {event.sequence: self._advance_compatible_runs(event, bond) for event in advances}
+
+        assignments = self._solve_run_assignment(
+            runs, plans, starts, advances, plan_compat, start_compat, advance_compat, bond
         )
-        necessity_kinds = (EventKind.PULL_PLANNED, EventKind.PULL_RUN_STARTED)
 
-        def needs_event(run: Any, kind: EventKind) -> bool:
-            run_bond = bond(run)
-            if kind == EventKind.PULL_PLANNED:
-                return run_bond["plan"] is None and (
-                    run_bond["started"] is not None or run_bond["completed"] is not None
-                )
-            if kind == EventKind.PULL_RUN_STARTED:
-                return run_bond["started"] is None and (
-                    run_bond["completed"] is not None
-                    or bool(run_bond["advances"])
-                    or run.started_at is not None
-                )
-            # Advance events are never forced: a run can finish in a single
-            # advance call without ever emitting a PULL_RUN_ADVANCED event.
-            return False
+        bound: dict[int, Any] = {}
+        if assignments:
+            owners_by_event: dict[int, set[int]] = {}
+            for assignment in assignments:
+                for event_seq, owner_run in assignment.items():
+                    owners_by_event.setdefault(event_seq, set()).add(id(owner_run))
+            events_by_seq = {
+                event.sequence: event for event in plans + starts + advances
+            }
+            for event_seq, owner_ids in owners_by_event.items():
+                if len(owner_ids) == 1:
+                    bound[event_seq] = next(run for run in runs if id(run) == next(iter(owner_ids)))
+                else:
+                    event = events_by_seq[event_seq]
+                    kind = self._kind_of_run_event(event)
+                    for run in runs:
+                        compat = self._compat_for(kind, event, plan_compat, start_compat, advance_compat)
+                        if run in compat and event not in bond(run)["ambiguous"][kind]:
+                            bond(run)["ambiguous"][kind].append(event)
+            for event_seq, owner_run in bound.items():
+                event = events_by_seq[event_seq]
+                kind = self._kind_of_run_event(event)
+                run_bond = bond(owner_run)
+                if kind == EventKind.PULL_PLANNED:
+                    run_bond["plan"] = event
+                elif kind == EventKind.PULL_RUN_STARTED:
+                    run_bond["started"] = event
+                else:
+                    run_bond["advances"].append(event)
+        else:
+            # No globally consistent full assignment (typically old data with
+            # missing events). Nothing is guessed: every compatible event is an
+            # ambiguity candidate for each run it could belong to.
+            for event in plans:
+                self._mark_ambiguous(event, EventKind.PULL_PLANNED, plan_compat[event.sequence], bond)
+            for event in starts:
+                self._mark_ambiguous(event, EventKind.PULL_RUN_STARTED, start_compat[event.sequence], bond)
+            for event in advances:
+                self._mark_ambiguous(event, EventKind.PULL_RUN_ADVANCED, advance_compat[event.sequence], bond)
 
-        progressed = True
-        while progressed and any(unassigned[kind] for kind in kinds):
-            progressed = False
-            # Uniqueness: event feasible for exactly one run.
-            for kind in kinds:
-                kept: list[Any] = []
-                for event in unassigned[kind]:
-                    candidates = self._event_candidate_runs(kind, event, bond)
-                    if len(candidates) == 1:
-                        assign(candidates[0], kind, event)
-                        progressed = True
-                    else:
-                        kept.append(event)
-                unassigned[kind] = kept
-            # Necessity: a run that must have this kind of event and sees
-            # exactly one still-feasible event claims it.
-            for kind in necessity_kinds:
-                for run in self.runs:
-                    run_bond = bond(run)
-                    if not needs_event(run, kind):
-                        continue
-                    options = [
-                        event
-                        for event in unassigned[kind]
-                        if run in self._event_candidate_runs(kind, event, bond)
-                    ]
-                    if len(options) == 1:
-                        assign(run, kind, options[0])
-                        unassigned[kind].remove(options[0])
-                        progressed = True
-
-        # Everything still unassigned here is genuinely ambiguous: record it
-        # on each run that could plausibly own it, never picking one.
-        for kind in kinds:
-            for event in unassigned[kind]:
-                for run in self._event_candidate_runs(kind, event, bond):
-                    ambiguous = bond(run)["ambiguous"][kind]
-                    if event not in ambiguous:
-                        ambiguous.append(event)
-
-        for run in self.runs:
+        for run in runs:
             bond(run)["advances"].sort(key=lambda item: item.sequence)
         return bond_for
+
+    def _solve_run_assignment(
+        self,
+        runs: list[Any],
+        plans: list[Any],
+        starts: list[Any],
+        advances: list[Any],
+        plan_compat: dict[Any, list[Any]],
+        start_compat: dict[Any, list[Any]],
+        advance_compat: dict[Any, list[Any]],
+        bond: Any,
+    ) -> list[dict[int, Any]]:
+        """Enumerate consistent event->run assignments up to a safety cap."""
+
+        events: list[Any] = list(plans) + list(starts) + list(advances)
+        events.sort(key=lambda item: item.sequence)
+        owners_by_run: dict[int, list[Any]] = {id(run): [] for run in runs}
+        assignments: list[dict[int, Any]] = []
+        cap = 512
+
+        def kind_of(event: Any) -> EventKind:
+            return self._kind_of_run_event(event)
+
+        def search(index: int, mapping: dict[int, Any]) -> None:
+            if len(assignments) >= cap:
+                return
+            if index == len(events):
+                if self._assignment_complete(runs, mapping, bond):
+                    assignments.append(dict(mapping))
+                return
+            event = events[index]
+            kind = kind_of(event)
+            compat = self._compat_for(kind, event, plan_compat, start_compat, advance_compat)
+            # Each event is visited exactly once, so assigning it never
+            # conflicts with another event; a run legitimately owns many
+            # events (one plan, one start, and several advances).
+            for run in compat:
+                if self._assignment_accepts(run, kind, event, owners_by_run[id(run)], bond, mapping):
+                    mapping[event.sequence] = run
+                    owners_by_run[id(run)].append(event)
+                    search(index + 1, mapping)
+                    owners_by_run[id(run)].pop()
+                    del mapping[event.sequence]
+                    if len(assignments) >= cap:
+                        return
+            # Advance events may legitimately stay unassigned (e.g. a run that
+            # finished in a single advance call); plan/start events cannot.
+            if kind == EventKind.PULL_RUN_ADVANCED:
+                search(index + 1, mapping)
+
+        search(0, {})
+        return assignments
+
+    def _assignment_complete(self, runs: list[Any], mapping: dict[int, Any], bond: Any) -> bool:
+        """Every run that executed must have its required plan/start event."""
+
+        owned_by_run: dict[int, list[Any]] = {id(run): [] for run in runs}
+        for event_seq, owner_run in mapping.items():
+            owned_by_run[id(owner_run)].append(self.event_by_seq[event_seq])
+        for run in runs:
+            owned = owned_by_run[id(run)]
+            has_plan = any(self._kind_of_run_event(item) == EventKind.PULL_PLANNED for item in owned)
+            has_start = any(self._kind_of_run_event(item) == EventKind.PULL_RUN_STARTED for item in owned)
+            owned_advances = [
+                item for item in owned if self._kind_of_run_event(item) == EventKind.PULL_RUN_ADVANCED
+            ]
+            has_advance = bool(owned_advances)
+            needs_lifecycle = bond(run)["completed"] is not None or run.started_at is not None or has_advance
+            if needs_lifecycle and not (has_plan and has_start):
+                return False
+            if not self._advances_feasible(run, sorted(owned_advances, key=lambda item: item.sequence), bond(run)):
+                return False
+            # A completed run's whole step list must be timed either by its own
+            # advance cursors or its single-call completion event. With an
+            # advance chain, the last cursor must reach the final step; without
+            # any advance, the run must be a single-call completion.
+            if bond(run)["completed"] is not None:
+                if owned_advances:
+                    cursors = [
+                        int((item.payload or {}).get("current_step", 0)) for item in owned_advances
+                    ]
+                    # Strictly increasing cursors; the run's own completion
+                    # event times every remaining step after the last advance,
+                    # so any final cursor below the total is acceptable.
+                    if any(cursors[i] <= cursors[i - 1] for i in range(1, len(cursors))):
+                        return False
+                    if cursors[-1] >= len(run.steps):
+                        return cursors[-1] == len(run.steps)
+                elif len(run.steps) > 1:
+                    return False
+        return True
+
+    def _assignment_accepts(
+        self,
+        run: Any,
+        kind: EventKind,
+        event: Any,
+        owned: list[Any],
+        bond: Any,
+        mapping: dict[int, Any],
+    ) -> bool:
+        """Check per-run chronological and cursor constraints incrementally."""
+
+        def is_available(candidate: Any) -> bool:
+            # A candidate plan/start event can anchor this run only if another
+            # run has not already claimed it in the current partial mapping.
+            return mapping.get(candidate.sequence, run) is run
+
+        owned_kinds = {self._kind_of_run_event(item): item for item in owned}
+        plan_event = owned_kinds.get(EventKind.PULL_PLANNED)
+        start_event = owned_kinds.get(EventKind.PULL_RUN_STARTED)
+        owned_advances = [
+            item for item in owned if self._kind_of_run_event(item) == EventKind.PULL_RUN_ADVANCED
+        ]
+        completion = bond(run)["completed"]
+        seq = event.sequence
+        if kind == EventKind.PULL_PLANNED:
+            if plan_event is not None:
+                return False
+            if start_event is not None and seq > start_event.sequence:
+                return False
+            if completion is not None and seq > completion.sequence:
+                return False
+            return True
+        if kind == EventKind.PULL_RUN_STARTED:
+            if start_event is not None:
+                return False
+            if plan_event is not None and seq < plan_event.sequence:
+                return False
+            if completion is not None and seq > completion.sequence:
+                return False
+            if plan_event is None:
+                plan_candidates = [
+                    item
+                    for item in self._events_of(EventKind.PULL_PLANNED)
+                    if item.sequence < seq
+                    and is_available(item)
+                    and (item.payload or {}).get("transfer_code") in (None, run.transfer_code)
+                    and (item.payload or {}).get("steps") in (None, len(run.steps))
+                ]
+                if not plan_candidates:
+                    return False
+            return True
+        # advance
+        cursor = int((event.payload or {}).get("current_step", 0))
+        if plan_event is not None and seq < plan_event.sequence:
+            return False
+        if start_event is not None and seq < start_event.sequence:
+            return False
+        if completion is not None and seq > completion.sequence:
+            return False
+        # A plan/start event not owned yet must still exist, unclaimed and
+        # before this advance in the journal; otherwise this advance could
+        # never belong to the run.
+        if start_event is None:
+            start_candidates = [
+                item
+                for item in self._events_of(EventKind.PULL_RUN_STARTED)
+                if item.sequence < seq
+                and is_available(item)
+                and (completion is None or item.sequence < completion.sequence)
+                and _timestamp_consistent(run.started_at, item.at)
+                and (item.payload or {}).get("total_steps") in (None, len(run.steps))
+            ]
+            if not start_candidates:
+                return False
+        if plan_event is None:
+            plan_candidates = [
+                item
+                for item in self._events_of(EventKind.PULL_PLANNED)
+                if item.sequence < seq
+                and is_available(item)
+                and (item.payload or {}).get("transfer_code") in (None, run.transfer_code)
+                and (item.payload or {}).get("steps") in (None, len(run.steps))
+            ]
+            if not plan_candidates:
+                return False
+        sorted_advances = sorted(
+            owned_advances + [event],
+            key=lambda item: (item.sequence, int((item.payload or {}).get("current_step", 0))),
+        )
+        return self._advances_feasible(run, sorted_advances, bond(run))
+
+    def _advances_feasible(self, run: Any, advances: list[Any], run_bond: dict[str, Any]) -> bool:
+        """Validate the cursor chain a run would own.
+
+        Cursors must start at 1 and increase by one per advance call (a call
+        can batch several steps, so jumps are allowed only when the missing
+        boundary is the run's own completion). For a completed run the last
+        owned cursor, together with its completion event, must account for the
+        whole step list; for a running run it must not exceed current_step.
+        """
+
+        if not advances:
+            return True
+        cursors = [int((item.payload or {}).get("current_step", 0)) for item in advances]
+        total_steps = len(run.steps)
+        if cursors[0] < 1:
+            return False
+        previous = cursors[0]
+        for cursor in cursors[1:]:
+            if cursor <= previous:
+                return False
+            previous = cursor
+        if cursors[-1] > total_steps:
+            return False
+        completion = run_bond["completed"]
+        if completion is None and str(run.state) != "COMPLETED":
+            if cursors[-1] > max(0, run.current_step):
+                return False
+        return True
+
+    def _mark_ambiguous(self, event: Any, kind: EventKind, candidates: list[Any], bond: Any) -> None:
+        for run in candidates:
+            bucket = bond(run)["ambiguous"][kind]
+            if event not in bucket:
+                bucket.append(event)
+
+    @staticmethod
+    def _kind_of_run_event(event: Any) -> EventKind:
+        return event.kind
+
+    @staticmethod
+    def _compat_for(kind, event, plan_compat, start_compat, advance_compat):
+        if kind == EventKind.PULL_PLANNED:
+            return plan_compat[event.sequence]
+        if kind == EventKind.PULL_RUN_STARTED:
+            return start_compat[event.sequence]
+        return advance_compat[event.sequence]
 
     def _completion_candidates(self, event: Any, bond: Any) -> list[Any]:
         payload = event.payload or {}
@@ -375,61 +589,57 @@ class _JourneyContext:
             and _timestamp_consistent(run.completed_at, event.at)
         ]
 
-    def _event_candidate_runs(self, kind: EventKind, event: Any, bond: Any) -> list[Any]:
+    def _plan_compatible_runs(self, event: Any, bond: Any) -> list[Any]:
         payload = event.payload or {}
-        candidates: list[Any] = []
+        result = []
         for run in self.runs:
-            run_bond = bond(run)
-            if kind == EventKind.PULL_PLANNED:
-                if run_bond["plan"] is not None:
-                    continue
-                if not _timestamp_consistent(run.created_at, event.at):
-                    continue
-                if payload.get("transfer_code") is not None and run.transfer_code != str(payload["transfer_code"]):
-                    continue
-                if payload.get("steps") is not None and len(run.steps) != int(payload["steps"]):
-                    continue
-                if run_bond["started"] is not None and event.sequence > run_bond["started"].sequence:
-                    continue
-                if run_bond["completed"] is not None and event.sequence > run_bond["completed"].sequence:
-                    continue
-            elif kind == EventKind.PULL_RUN_STARTED:
-                if run_bond["started"] is not None:
-                    continue
-                if not _timestamp_consistent(run.started_at, event.at):
-                    continue
-                if payload.get("total_steps") is not None and len(run.steps) != int(payload["total_steps"]):
-                    continue
-                if run_bond["plan"] is not None and event.sequence < run_bond["plan"].sequence:
-                    continue
-                if run_bond["completed"] is not None and event.sequence > run_bond["completed"].sequence:
-                    continue
-            else:  # PULL_RUN_ADVANCED
-                cursor = payload.get("current_step")
-                if cursor is None or int(cursor) >= len(run.steps):
-                    continue
-                if run.started_at is None:
-                    continue
-                if run_bond["plan"] is not None and event.sequence < run_bond["plan"].sequence:
-                    continue
-                if run_bond["started"] is not None and event.sequence < run_bond["started"].sequence:
-                    continue
-                if run_bond["completed"] is not None and event.sequence > run_bond["completed"].sequence:
-                    continue
-                if run_bond["advances"]:
-                    last_cursor = int((run_bond["advances"][-1].payload or {}).get("current_step", -1))
-                    if int(cursor) <= last_cursor:
-                        continue
-            candidates.append(run)
-        return candidates
+            if bond(run)["plan"] is not None:
+                continue
+            if not _timestamp_consistent(run.created_at, event.at):
+                continue
+            if payload.get("transfer_code") is not None and run.transfer_code != str(payload["transfer_code"]):
+                continue
+            if payload.get("steps") is not None and len(run.steps) != int(payload["steps"]):
+                continue
+            completion = bond(run)["completed"]
+            if completion is not None and event.sequence > completion.sequence:
+                continue
+            result.append(run)
+        return result
+
+    def _start_compatible_runs(self, event: Any, bond: Any) -> list[Any]:
+        payload = event.payload or {}
+        result = []
+        for run in self.runs:
+            if bond(run)["started"] is not None:
+                continue
+            if not _timestamp_consistent(run.started_at, event.at):
+                continue
+            if payload.get("total_steps") is not None and len(run.steps) != int(payload["total_steps"]):
+                continue
+            completion = bond(run)["completed"]
+            if completion is not None and event.sequence > completion.sequence:
+                continue
+            result.append(run)
+        return result
+
+    def _advance_compatible_runs(self, event: Any, bond: Any) -> list[Any]:
+        payload = event.payload or {}
+        cursor = payload.get("current_step")
+        result = []
+        for run in self.runs:
+            if cursor is None or not (0 < int(cursor) <= len(run.steps)):
+                continue
+            if run.started_at is None:
+                continue
+            completion = bond(run)["completed"]
+            if completion is not None and event.sequence > completion.sequence:
+                continue
+            result.append(run)
+        return result
 
     def _link_depart_events(self) -> tuple[dict[int, Any], dict[int, list[Any]]]:
-        """Assign TRAIN_DEPARTED events only when the owner is unique.
-
-        Returns the unique event per train and, for every train that could
-        plausibly own an unassigned event, the candidate events kept as an
-        evidence gap instead of being guessed.
-        """
+        """Assign TRAIN_DEPARTED events only when the owner is unique."""
 
         links: dict[int, Any] = {}
         ambiguous: dict[int, list[Any]] = {}
@@ -509,21 +719,10 @@ class _JourneyContext:
                     phase="RECEIVED",
                 )
             )
-            # Entity-only fragments are ordered by causal phase first so the
-            # trajectory stays readable even when wall clocks disagree.
-            _anchor_fallback_key(
-                entry,
-                (
-                    _PHASE_RANK["RECEIVED"],
-                    0,
-                    self.intakes.index(intake),
-                    intake.code,
-                    "RECEIVED",
-                ),
-            )
         entry["intake_code"] = intake.code
         entry["location"] = "INTAKE"
         entry["detail"] = f"received with intake {intake.code} from route {intake.route}"
+        _set_order(entry, (_GROUP_RECEIVED, self.intakes.index(intake), 0))
         entries.append(entry)
 
     def _classified_entry(
@@ -583,21 +782,8 @@ class _JourneyContext:
         entry["detail"] = f"classified onto standing track {track_code}"
         if intake is not None:
             entry["detail"] = f"classified from intake {intake.code} onto standing track {track_code}"
-        if event is not None:
-            _anchor_event(entry, event)
-            entry["_sub"] = list(intake.consist).index(car_code) if car_code in intake.consist else 0
-        else:
-            intake_order = self.intakes.index(intake) if intake is not None and intake in self.intakes else 9999
-            _anchor_fallback_key(
-                entry,
-                (
-                    _PHASE_RANK["CLASSIFIED"],
-                    0,
-                    intake_order,
-                    track_code,
-                    "CLASSIFIED",
-                ),
-            )
+        intake_order = self.intakes.index(intake) if intake is not None and intake in self.intakes else 9999
+        _set_order(entry, (_GROUP_CLASSIFIED, intake_order, 0))
         entries.append(entry)
 
     def _run_entries(
@@ -613,13 +799,43 @@ class _JourneyContext:
         planned_codes = self._run_planned_codes(run)
         executed = self._executed_step_count(run, bond)
 
+        ambiguous_start = bond["ambiguous"][EventKind.PULL_RUN_STARTED]
+        run_started = bond.get("started") is not None
+        run_executed = bond.get("completed") is not None or run.started_at is not None
+        involves_car = car_code in planned_codes or any(step.car_code == car_code for step in run.steps[:executed])
+        if not run_started and run_executed and involves_car:
+            if ambiguous_start:
+                gaps.append(
+                    _gap(
+                        "AMBIGUOUS_START_EVENT",
+                        car_code,
+                        f"start event for run {run.code} could not be uniquely attributed; "
+                        "no other run's start record is used",
+                        run_code=run.code,
+                        candidate_event_sequences=[event.sequence for event in ambiguous_start],
+                    )
+                )
+            else:
+                gaps.append(
+                    _gap(
+                        "MISSING_START_EVENT",
+                        car_code,
+                        f"run {run.code} executed but has no start journal event",
+                        run_code=run.code,
+                    )
+                )
+
+        run_order = self.runs.index(run)
         if car_code in planned_codes:
-            entries.append(self._reserved_entry(car_code, run, bond, gaps))
+            reserved = self._reserved_entry(car_code, run, bond, gaps)
+            _set_order(reserved, (_GROUP_RUN, run_order, -1))
+            entries.append(reserved)
 
         boundaries = self._step_boundaries(run, bond, executed)
         pull_count = 0
         missing_time = False
         ambiguous_time = False
+        move_candidates: list[int] = []
         for step_index, step in enumerate(run.steps):
             if step_index >= executed or step.car_code != car_code:
                 continue
@@ -653,28 +869,19 @@ class _JourneyContext:
             boundary = boundaries.get(step_index)
             if boundary is not None:
                 _anchor_event(entry, boundary)
-                entry["_sub"] = step_index
             else:
+                # No advance event uniquely attributable to this run for the
+                # step. Another run's event is never borrowed: either a matching
+                # event exists but is ambiguous, or no advance was logged
+                # (single-call completion / old data).
                 entry["evidence"] = "entity"
-                ambiguous_events = bond["ambiguous"][EventKind.PULL_RUN_ADVANCED]
-                if bond["completed"] is None and bond["ambiguous"][EventKind.PULL_RUN_COMPLETED]:
-                    ambiguous_events = ambiguous_events + bond["ambiguous"][EventKind.PULL_RUN_COMPLETED]
-                if ambiguous_events:
+                matching = self._matching_advance_events(run, bond, step_index)
+                if matching:
                     ambiguous_time = True
+                    move_candidates.extend(item.sequence for item in matching)
                 else:
                     missing_time = True
-                # All moves of one run share the run-group anchor (reserved)
-                # and sort within the group by step index.
-                _anchor_fallback_key(
-                    entry,
-                    (
-                        _PHASE_RANK["RESERVED"],
-                        self.runs.index(run),
-                        step_index,
-                        run.code,
-                        phase,
-                    ),
-                )
+            _set_order(entry, (_GROUP_RUN, run_order, step_index))
             entries.append(entry)
         if ambiguous_time:
             gaps.append(
@@ -682,8 +889,9 @@ class _JourneyContext:
                     "AMBIGUOUS_MOVE_EVENT",
                     car_code,
                     f"executed move(s) of run {run.code} could not be matched to a unique "
-                    "advance/completion journal event; no other run's event is used",
+                    "advance journal event; no other run's event is used",
                     run_code=run.code,
+                    candidate_event_sequences=sorted(set(move_candidates)),
                 )
             )
         elif missing_time:
@@ -691,7 +899,8 @@ class _JourneyContext:
                 _gap(
                     "MISSING_MOVE_TIME",
                     car_code,
-                    f"executed move(s) of run {run.code} have no advance/completion journal event",
+                    f"executed move(s) of run {run.code} have no uniquely attributable "
+                    "advance journal event",
                     run_code=run.code,
                 )
             )
@@ -708,7 +917,6 @@ class _JourneyContext:
         plan_event = bond.get("plan")
         if plan_event is not None:
             _anchor_event(entry, plan_event)
-            entry["_sub"] = self._planned_position(run, car_code) or 0
         else:
             entry["at"] = run.created_at or None
             entry["evidence"] = "entity"
@@ -736,25 +944,7 @@ class _JourneyContext:
                         run_code=run.code,
                     )
                 )
-            _anchor_fallback_key(
-                entry,
-                (
-                    _PHASE_RANK["RESERVED"],
-                    self.runs.index(run),
-                    self._run_first_step_index(run, car_code),
-                    f"0-{run.code}",
-                    "RESERVED",
-                ),
-            )
         return entry
-
-    def _run_first_step_index(self, run: Any, car_code: str) -> int:
-        """First step index involving the car, for causal fallback ordering."""
-
-        for index, step in enumerate(run.steps):
-            if step.car_code == car_code:
-                return index
-        return len(run.steps)
 
     def _departed_entry(
         self,
@@ -802,16 +992,14 @@ class _JourneyContext:
                             outbound_code=outbound.code,
                         )
                     )
-                _anchor_fallback_key(
-                    entry,
-                    (
-                        _PHASE_RANK["DEPARTED"],
-                        self.outbounds.index(outbound),
-                        outbound.assembled_car_codes.index(car_code),
-                        outbound.code,
-                        "DEPARTED",
-                    ),
-                )
+            _set_order(
+                entry,
+                (
+                    _GROUP_DEPARTED,
+                    self.outbounds.index(outbound),
+                    outbound.assembled_car_codes.index(car_code),
+                ),
+            )
             entries.append(entry)
 
     def _executed_step_count(self, run: Any, bond: dict[str, Any]) -> int:
@@ -823,22 +1011,57 @@ class _JourneyContext:
         return 0
 
     def _step_boundaries(self, run: Any, bond: dict[str, Any], executed: int) -> dict[int, Any]:
-        """Map each executed step index to the event that completed its batch."""
+        """Map each executed step to an event uniquely attributed to this run.
+
+        An advance with cursor K times the batch ending at step K-1. If the run
+        finished in a single advance call there is no advance event at all, so
+        the whole step list is timed by this run's own completion event. When
+        advances exist, the completion event times only the final tail batch
+        (the step at total-1); earlier steps must have their own advance
+        event. Events owned by another run, and ambiguous events, are never
+        used here.
+        """
 
         boundary_events: list[tuple[int, Any]] = []
         for event in bond.get("advances", []):
             cursor = int((event.payload or {}).get("current_step", 0))
             boundary_events.append((cursor, event))
-        completed = bond.get("completed")
-        if completed is not None:
-            boundary_events.append((len(run.steps), completed))
         boundary_events.sort(key=lambda item: item[0])
         result: dict[int, Any] = {}
-        for step_index in range(executed):
-            match = next((event for cursor, event in boundary_events if cursor > step_index), None)
-            if match is not None:
-                result[step_index] = match
+        previous_cursor = 0
+        for cursor, event in boundary_events:
+            for step_index in range(previous_cursor, min(cursor, executed)):
+                result[step_index] = event
+            previous_cursor = max(previous_cursor, cursor)
+        completion = bond.get("completed")
+        if completion is not None and previous_cursor < executed:
+            ambiguous_advances = bond["ambiguous"][EventKind.PULL_RUN_ADVANCED]
+            if not boundary_events and not ambiguous_advances:
+                # Genuinely single-call completion: the run's own completion
+                # event times every step.
+                for step_index in range(previous_cursor, executed):
+                    result[step_index] = completion
+            elif not boundary_events:
+                # Advance events exist but none is uniquely attributable to
+                # this run. Only the final tail step is timed by completion;
+                # earlier steps stay untimed and are reported as gaps.
+                result[executed - 1] = completion
+            else:
+                # Owned advances cover the prefix; the run's own completion
+                # event times every remaining step of the final batch.
+                for step_index in range(previous_cursor, executed):
+                    result.setdefault(step_index, completion)
         return result
+
+    def _matching_advance_events(self, run: Any, bond: dict[str, Any], step_index: int) -> list[Any]:
+        """Ambiguous advance events that could have timed the given step."""
+
+        needed_cursor = step_index + 1
+        return [
+            event
+            for event in bond["ambiguous"][EventKind.PULL_RUN_ADVANCED]
+            if int((event.payload or {}).get("current_step", 0)) == needed_cursor
+        ]
 
 
 # ---------------------------------------------------------------------------
@@ -864,12 +1087,14 @@ def _base_entry(phase: str) -> dict[str, Any]:
         "assembly_position": None,
         "evidence": "event",
         "detail": "",
-        # Internal ordering fields, stripped before the document is returned.
-        "_tier": 1,
-        "_seq": 0,
-        "_sub": 0,
-        "_fallback": (999, 9999, 9999, "", ""),
+        # Internal causal position tuple, stripped before the document is
+        # returned; independent of which evidence backs the entry.
+        "_order": (99, 9999, 9999),
     }
+
+
+def _set_order(entry: dict[str, Any], order: tuple[Any, ...]) -> None:
+    entry["_order"] = order
 
 
 def _anchor_event(entry: dict[str, Any], event: Any) -> None:
@@ -877,17 +1102,6 @@ def _anchor_event(entry: dict[str, Any], event: Any) -> None:
     entry["event_sequence"] = event.sequence
     entry["shift_code"] = event.shift_code or None
     entry["evidence"] = "event"
-    entry["_tier"] = 0
-    entry["_seq"] = event.sequence
-
-
-def _anchor_fallback_key(entry: dict[str, Any], key: tuple[Any, ...]) -> None:
-    entry["_tier"] = 1
-    entry["_fallback"] = tuple(key)
-
-
-def _entry_sort_key(entry: dict[str, Any]) -> tuple[Any, ...]:
-    return (entry["_tier"], entry["_seq"], entry["_sub"], *entry["_fallback"])
 
 
 # ---------------------------------------------------------------------------
