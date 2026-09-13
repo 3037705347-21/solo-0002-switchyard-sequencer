@@ -28,6 +28,7 @@ PYTHONPATH=src python3 checks/wf_intake_classify.py
 PYTHONPATH=src python3 checks/wf_outbound_sequence.py
 PYTHONPATH=src python3 checks/wf_pull_depart.py
 PYTHONPATH=src python3 checks/wf_close_shift.py
+PYTHONPATH=src python3 checks/wf_shift_snapshot_archive.py
 ```
 
 Each check starts an isolated server on a free port with a temporary data
@@ -67,7 +68,30 @@ POST /api/pull-runs/RUN-01/advance
 POST /api/outbound-trains/OB-01/depart
 POST /api/shifts/SHIFT-01/close
 GET  /api/yard
+GET  /api/shift-snapshots
+GET  /api/shift-snapshots/SNAP-SHIFT-01
+POST /api/shift-snapshots/diff
 ```
+
+### Shift snapshot archive
+
+Every approved closure appends an immutable snapshot to the
+`closure_snapshots` archive. Each document freezes the complete metrics, the
+workspace/shift version, the closure timestamp, and the source event range
+(first/last event sequence and count contributed by that shift):
+
+- `GET /api/shift-snapshots` lists snapshots newest-first, optionally filtered
+  by `shift_code`, `closed_from`, and `closed_to` (ISO-8601, inclusive).
+- `GET /api/shift-snapshots/{code}` returns one full snapshot document.
+- `POST /api/shift-snapshots/diff` with `{"base": ..., "target": ...}` produces
+  a field-level comparison covering car state counts, track occupancy,
+  open/completed outbounds, unfinished runs (plus run/outbound state counts),
+  blockers, and source event ranges. Missing fields are reported explicitly
+  with `missing_in_base` / `missing_in_target`, `null` values, and `null` deltas
+  instead of being treated as zero.
+
+Archive reads never commit and never mutate the live yard; later shifts can
+only append new snapshots and can never rewrite older ones.
 
 Request and response examples are embedded in the project specification and in
 the workflow checks.

@@ -74,7 +74,7 @@ class RunningServer:
         self.port = free_port()
         self.base_url = f"http://127.0.0.1:{self.port}"
         self.temp_dir = tempfile.TemporaryDirectory(prefix="switchyard-check-")
-        data_dir = data_dir or Path(self.temp_dir.name) / "data"
+        self.data_dir = Path(data_dir) if data_dir else Path(self.temp_dir.name) / "data"
         env = dict(os.environ)
         env["PYTHONPATH"] = str(SRC_DIR)
         self.process = subprocess.Popen(
@@ -87,7 +87,7 @@ class RunningServer:
                 "--port",
                 str(self.port),
                 "--data-dir",
-                str(data_dir),
+                str(self.data_dir),
             ],
             cwd=PROJECT_ROOT,
             env=env,

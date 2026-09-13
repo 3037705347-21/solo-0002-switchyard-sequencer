@@ -4,7 +4,33 @@ from __future__ import annotations
 
 from typing import Any
 
-from ..domain.enums import CarState, RunState, ShiftState
+from ..domain.enums import CarState, OutboundState, RunState, ShiftState
+
+CAR_STATE_KEYS = (
+    "received",
+    "standing",
+    "reserved",
+    "assembled",
+    "departed",
+    "removed",
+)
+
+OUTBOUND_STATE_KEYS = (
+    "draft",
+    "planned",
+    "ready",
+    "departed",
+    "abandoned",
+)
+
+RUN_STATE_KEYS = ("queued", "running", "completed", "failed")
+
+OUTBOUND_OPEN_STATES = {
+    OutboundState.DRAFT,
+    OutboundState.PLANNED,
+    OutboundState.READY,
+}
+RUN_UNFINISHED_STATES = {RunState.QUEUED, RunState.RUNNING, RunState.FAILED}
 
 
 def yard_metrics(workspace: Any) -> dict[str, Any]:
@@ -44,6 +70,30 @@ def yard_metrics(workspace: Any) -> dict[str, Any]:
         for bay in workspace.buffer_bays.values()
     ]
     active_intakes = [code for code, train in workspace.intakes.items() if train.state.value in {"OPEN", "PARTIAL"}]
+    outbound_state_counts = {key: 0 for key in OUTBOUND_STATE_KEYS}
+    open_outbounds: list[str] = []
+    completed_outbounds: list[str] = []
+    for code, train in sorted(workspace.outbounds.items()):
+        outbound_state_counts[str(train.state).lower()] += 1
+        if train.state in OUTBOUND_OPEN_STATES:
+            open_outbounds.append(code)
+        elif train.state == OutboundState.DEPARTED:
+            completed_outbounds.append(code)
+    run_state_counts = {key: 0 for key in RUN_STATE_KEYS}
+    unfinished_runs: list[dict[str, Any]] = []
+    for code, run in sorted(workspace.runs.items()):
+        run_state_counts[str(run.state).lower()] += 1
+        if run.state in RUN_UNFINISHED_STATES:
+            unfinished_runs.append(
+                {
+                    "code": code,
+                    "outbound_code": run.outbound_code,
+                    "state": str(run.state),
+                    "current_step": run.current_step,
+                    "total_steps": len(run.steps),
+                    "remaining_steps": run.remaining(),
+                }
+            )
     active_outbounds = [
         code
         for code, train in workspace.outbounds.items()
@@ -62,13 +112,35 @@ def yard_metrics(workspace: Any) -> dict[str, Any]:
             "removed": removed,
         },
         "track_metrics": track_metrics,
+        "track_occupancy": _track_occupancy(track_metrics),
         "transfer_bays": bay_metrics,
         "active_intakes": sorted(active_intakes),
         "active_outbounds": sorted(active_outbounds),
         "active_runs": sorted(active_runs),
+        "open_outbounds": sorted(open_outbounds),
+        "completed_outbounds": sorted(completed_outbounds),
+        "outbound_state_counts": outbound_state_counts,
+        "run_state_counts": run_state_counts,
+        "unfinished_runs": unfinished_runs,
         "open_shifts": sorted(open_shifts),
         "event_count": len(workspace.events),
         "version": workspace.version,
+    }
+
+
+def _track_occupancy(track_metrics: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    return {
+        item["code"]: {
+            "state": item["state"],
+            "cars": item["cars"],
+            "length_m": item["length_m"],
+            "capacity_cars": item["capacity_cars"],
+            "capacity_length_m": item["capacity_length_m"],
+            "car_utilization": item["car_utilization"],
+            "length_utilization": item["length_utilization"],
+            "top_car": item["top_car"],
+        }
+        for item in track_metrics
     }
 
 
@@ -78,4 +150,9 @@ def _percentage(value: int, total: int) -> float:
     return round((value / total) * 100, 2)
 
 
-__all__ = ["yard_metrics"]
+__all__ = [
+    "CAR_STATE_KEYS",
+    "OUTBOUND_STATE_KEYS",
+    "RUN_STATE_KEYS",
+    "yard_metrics",
+]

@@ -34,8 +34,10 @@ state as JSON files under a configurable data directory.
   sequence and an assembled sequence.
 - `PullRun`: a stateful sequence of buffer, pull, and return actions derived
   from a validated outbound plan.
-- `ClosureSnapshot`: an immutable metric set and blocker list produced when a
-  shift closes.
+- `ClosureSnapshot`: an immutable metric set, shift/workspace version, source
+  event range, and blocker list produced when a shift closes. Snapshots are
+  appended to an archive that can be listed by shift and closure time, read in
+  full, and compared pairwise at field level.
 
 ## Workflows
 
@@ -81,8 +83,25 @@ The shift lead requests closure. The service computes standing, reserved,
 assembled, and departed car totals plus track occupancy and open-train counts.
 It blocks closure when any intake is open, any run is queued or running, or any
 standing track is in maintenance with cars present. When the checks pass, it
-stores a `ClosureSnapshot`, records the closure event, and exposes the yard
-view for verification.
+appends an immutable `ClosureSnapshot` (complete metrics, shift/workspace
+version, closure timestamp, and source event range), records the closure event,
+and exposes the yard view for verification.
+
+### 5. Review the shift snapshot archive
+
+Entry: `GET /api/shift-snapshots`, `GET /api/shift-snapshots/{code}`,
+`POST /api/shift-snapshots/diff`
+
+Shift leads and the incoming handoff list archived snapshots by shift code or
+closure time window and open any snapshot in full. A diff request selecting two
+snapshot codes returns a field-level comparison covering car state counts,
+track occupancy, open and completed outbounds, unfinished runs and run/outbound
+state counts, blockers, and source event ranges. Each compared field reports
+its base/target values, delta when numeric, and an explicit
+`missing_in_base`/`missing_in_target` status when one snapshot lacks the field;
+missing values are returned as `null`, never defaulted to zero. Archive reads
+are pure: they never mutate the live yard, and a new shift can only append a
+new snapshot — it can never rewrite or delete an older one.
 
 ## State and rules
 
@@ -105,6 +124,10 @@ view for verification.
   is not reserved elsewhere and the transfer bay has enough capacity.
 - Closure is derived from the persisted workspace and never mutates car or
   track state.
+- Closure snapshots are append-only and immutable: a closure rejects duplicate
+  snapshot codes, archive reads return detached copies and never commit, and
+  pairwise diffs surface missing fields explicitly instead of coercing them to
+  zero.
 
 ## Modules and dependency direction
 
@@ -134,6 +157,10 @@ workspace snapshot and never mutate it.
 - `POST /api/shifts/{code}/close`: create a closure snapshot.
 - `GET /api/yard`: return the full yard view.
 - `GET /api/shifts/{code}`: return shift details and recent events.
+- `GET /api/shift-snapshots`: list archived snapshots, filterable by
+  `shift_code`, `closed_from`, and `closed_to`.
+- `GET /api/shift-snapshots/{code}`: return one full snapshot document.
+- `POST /api/shift-snapshots/diff`: compare two snapshots field by field.
 
 The service listens on a local port chosen through `--port` or the
 `SWITCHYARD_PORT` environment variable. Data is stored under `--data-dir` or
