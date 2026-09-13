@@ -41,9 +41,11 @@ class PullRun:
     steps: list[MoveStep] = field(default_factory=list)
     state: RunState = RunState.QUEUED
     current_step: int = 0
+    shift_code: str | None = None
     created_at: str = field(default_factory=now_iso)
     started_at: str | None = None
     completed_at: str | None = None
+    failed_at: str | None = None
     error: str | None = None
 
     def to_dict(self) -> dict[str, object]:
@@ -54,9 +56,11 @@ class PullRun:
             "steps": [step.to_dict() for step in self.steps],
             "state": str(self.state),
             "current_step": self.current_step,
+            "shift_code": self.shift_code,
             "created_at": self.created_at,
             "started_at": self.started_at,
             "completed_at": self.completed_at,
+            "failed_at": self.failed_at,
             "error": self.error,
         }
 
@@ -70,9 +74,11 @@ class PullRun:
             steps=steps,
             state=RunState.parse(str(raw.get("state", RunState.QUEUED.value))),
             current_step=int(raw.get("current_step", 0)),
+            shift_code=None if raw.get("shift_code") is None else str(raw["shift_code"]),
             created_at=str(raw.get("created_at", "")),
             started_at=None if raw.get("started_at") is None else str(raw["started_at"]),
             completed_at=None if raw.get("completed_at") is None else str(raw["completed_at"]),
+            failed_at=None if raw.get("failed_at") is None else str(raw["failed_at"]),
             error=None if raw.get("error") is None else str(raw["error"]),
         )
 

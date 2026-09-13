@@ -107,11 +107,12 @@ def sequence_outbound(app: YardApplication, outbound_code: str, payload: Any) ->
         transfer_code,
     )
     workspace.runs[run.code] = run
+    run.shift_code = shift_code
     event = workspace.record_event(
         shift_code,
         EventKind.PULL_PLANNED,
         f"pull run {run.code} planned for {outbound.code}",
-        {"steps": len(run.steps), "transfer_code": transfer_code},
+        {"run_code": run.code, "steps": len(run.steps), "transfer_code": transfer_code},
     )
     app.commit(workspace, event)
     return {"pull_run": run.to_dict(), "outbound": outbound.to_dict()}

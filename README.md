@@ -27,6 +27,7 @@ workflow checks exercise the real HTTP API:
 PYTHONPATH=src python3 checks/wf_intake_classify.py
 PYTHONPATH=src python3 checks/wf_outbound_sequence.py
 PYTHONPATH=src python3 checks/wf_pull_depart.py
+PYTHONPATH=src python3 checks/wf_pull_run_view.py
 PYTHONPATH=src python3 checks/wf_close_shift.py
 ```
 

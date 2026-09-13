@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from ..domain.enums import CarState, EventKind, OutboundState, RunState
-from ..domain.errors import ConflictError, NotFoundError, ResourceBusyError, ValidationError
+from ..domain.errors import ConflictError, DomainError, NotFoundError, ResourceBusyError, ValidationError
 from ..domain.executor import execute_step
 from ..domain.timeutil import now_iso
 from ..domain.transitions import transition_car, transition_outbound, transition_run
@@ -40,25 +40,47 @@ def advance_run(app: YardApplication, run_code: str, payload: Any) -> dict[str, 
                 shift_code,
                 EventKind.PULL_RUN_STARTED,
                 f"pull run {run_code} started",
-                {"total_steps": len(run.steps)},
+                {"run_code": run_code, "total_steps": len(run.steps)},
             )
         )
     executed = 0
-    while executed < requested_steps and run.current_step < len(run.steps):
-        step = run.steps[run.current_step]
-        execute_step(workspace, run, step)
-        run.current_step += 1
-        executed += 1
-    outbound = workspace.outbounds.get(run.outbound_code)
-    if outbound is None:
-        raise NotFoundError("outbound train", run.outbound_code)
-    completed = run.current_step >= len(run.steps)
-    if completed:
-        if not outbound.assembly_complete():
-            raise ValidationError(
-                "pull run finished without matching the planned consist",
-                **{"assembled": outbound.assembled_car_codes},
+    try:
+        while executed < requested_steps and run.current_step < len(run.steps):
+            step = run.steps[run.current_step]
+            execute_step(workspace, run, step)
+            run.current_step += 1
+            executed += 1
+        outbound = workspace.outbounds.get(run.outbound_code)
+        if outbound is None:
+            raise NotFoundError("outbound train", run.outbound_code)
+        completed = run.current_step >= len(run.steps)
+        if completed:
+            if not outbound.assembly_complete():
+                raise ValidationError(
+                    "pull run finished without matching the planned consist",
+                    **{"assembled": outbound.assembled_car_codes},
+                )
+    except DomainError as exc:
+        transition_run(run, RunState.FAILED)
+        run.error = str(exc)
+        run.failed_at = now_iso()
+        events.append(
+            workspace.record_event(
+                shift_code,
+                EventKind.PULL_RUN_FAILED,
+                f"pull run {run_code} failed at step {run.current_step + 1}: {exc}",
+                {
+                    "run_code": run_code,
+                    "failed_step": run.current_step + 1,
+                    "executed_steps": executed,
+                    "error_code": exc.code,
+                    "error": str(exc),
+                },
             )
+        )
+        app.commit(workspace, events)
+        raise
+    if completed:
         run.state = RunState.COMPLETED
         run.completed_at = now_iso()
         transition_outbound(outbound, OutboundState.READY)
@@ -68,6 +90,7 @@ def advance_run(app: YardApplication, run_code: str, payload: Any) -> dict[str, 
                 EventKind.PULL_RUN_COMPLETED,
                 f"pull run {run_code} completed",
                 {
+                    "run_code": run_code,
                     "assembled_car_codes": list(outbound.assembled_car_codes),
                     "steps": len(run.steps),
                 },
@@ -80,6 +103,7 @@ def advance_run(app: YardApplication, run_code: str, payload: Any) -> dict[str, 
                 EventKind.PULL_RUN_ADVANCED,
                 f"pull run {run_code} advanced {executed} steps",
                 {
+                    "run_code": run_code,
                     "current_step": run.current_step,
                     "remaining": run.remaining(),
                 },

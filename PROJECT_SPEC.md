@@ -93,6 +93,10 @@ view for verification.
 - Outbound state moves from `draft` to `planned` when a pull run is created,
   then to `ready` when assembly completes, then to `departed`.
 - Pull runs move from `queued` to `running`, then `completed` or `failed`.
+  An advance that cannot execute its next verified action (for example the
+  planned car is no longer on top of its source stack) persists the run as
+  `failed` with the failing step number and reason; a failed run is terminal
+  and is never re-executed by a query.
 - Car state moves from `received` to `standing`, `reserved`, `assembled`, and
   `departed`.
 - Destination-sorting tracks accept only cars whose destination matches the
@@ -130,6 +134,14 @@ workspace snapshot and never mutate it.
 - `POST /api/outbound-trains`: create an outbound train.
 - `POST /api/outbound-trains/{code}/sequencer`: create a pull run.
 - `POST /api/pull-runs/{code}/advance`: execute the next pull actions.
+- `GET /api/pull-runs`: list pull runs with optional `shift=<code>` and
+  `state=<QUEUED,RUNNING,COMPLETED,FAILED>` (comma-separated) filters.
+- `GET /api/pull-runs/{code}`: return the full pull run view: plan and
+  execution state, progress, every move step with its status, the current
+  operation target and its readiness, the blocking reason, and the linked
+  outbound train with assembled and remaining cars. The view is read-only and
+  is derived from the same persisted workspace used by every command, so a
+  service restart or a different client terminal restores the same context.
 - `POST /api/outbound-trains/{code}/depart`: mark an assembled train departed.
 - `POST /api/shifts/{code}/close`: create a closure snapshot.
 - `GET /api/yard`: return the full yard view.

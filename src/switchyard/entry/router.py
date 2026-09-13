@@ -48,49 +48,73 @@ class Router:
             Route("POST", r"/api/outbound-trains", self._create_outbound),
             Route("POST", r"/api/outbound-trains/(?P<code>[^/]+)/sequencer", self._sequence),
             Route("POST", r"/api/outbound-trains/(?P<code>[^/]+)/depart", self._depart),
+            Route("GET", r"/api/pull-runs", self._run_list),
+            Route("GET", r"/api/pull-runs/(?P<code>[^/]+)", self._run_view),
             Route("POST", r"/api/pull-runs/(?P<code>[^/]+)/advance", self._advance),
         ]
 
     def dispatch(self, method: str, path: str, body: Any) -> tuple[int, dict[str, Any]]:
+        raw_path, _, query_string = path.partition("?")
+        query = query_service.parse_query_string(query_string) if query_string else {}
         for route in self.routes:
-            args = route.match(method, path)
+            args = route.match(method, raw_path)
             if args is None:
                 continue
-            value = route.handler(body, **args)
+            value = route.handler(body, query, **args)
             return 200, {"ok": True, "data": value}
         raise NotFoundError("route", f"{method} {path}")
 
-    def _health(self, body: Any) -> dict[str, Any]:
+    def _health(self, body: Any, query: dict[str, list[str]] | None = None) -> dict[str, Any]:
         return {"service": "switchyard-sequencer", "status": "ready"}
 
-    def _yard(self, body: Any) -> dict[str, Any]:
+    def _yard(self, body: Any, query: dict[str, list[str]] | None = None) -> dict[str, Any]:
         return query_service.yard_view(self.app)
 
-    def _open_shift(self, body: Any) -> dict[str, Any]:
+    def _open_shift(self, body: Any, query: dict[str, list[str]] | None = None) -> dict[str, Any]:
         return shift_service.open_shift(self.app, body)
 
-    def _shift_view(self, body: Any, code: str) -> dict[str, Any]:
+    def _shift_view(
+        self, body: Any, query: dict[str, list[str]] | None = None, code: str = ""
+    ) -> dict[str, Any]:
         return shift_service.get_shift(self.app, code)
 
-    def _close_shift(self, body: Any, code: str) -> dict[str, Any]:
+    def _close_shift(
+        self, body: Any, query: dict[str, list[str]] | None = None, code: str = ""
+    ) -> dict[str, Any]:
         return closure_service.close_shift(self.app, code)
 
-    def _create_intake(self, body: Any) -> dict[str, Any]:
+    def _create_intake(self, body: Any, query: dict[str, list[str]] | None = None) -> dict[str, Any]:
         return intake_service.create_intake(self.app, body)
 
-    def _classify(self, body: Any, code: str) -> dict[str, Any]:
+    def _classify(
+        self, body: Any, query: dict[str, list[str]] | None = None, code: str = ""
+    ) -> dict[str, Any]:
         return intake_service.classify_intake_command(self.app, code)
 
-    def _create_outbound(self, body: Any) -> dict[str, Any]:
+    def _create_outbound(self, body: Any, query: dict[str, list[str]] | None = None) -> dict[str, Any]:
         return outbound_service.create_outbound(self.app, body)
 
-    def _sequence(self, body: Any, code: str) -> dict[str, Any]:
+    def _sequence(
+        self, body: Any, query: dict[str, list[str]] | None = None, code: str = ""
+    ) -> dict[str, Any]:
         return outbound_service.sequence_outbound(self.app, code, body)
 
-    def _depart(self, body: Any, code: str) -> dict[str, Any]:
+    def _depart(
+        self, body: Any, query: dict[str, list[str]] | None = None, code: str = ""
+    ) -> dict[str, Any]:
         return run_service.depart_outbound(self.app, code)
 
-    def _advance(self, body: Any, code: str) -> dict[str, Any]:
+    def _run_list(self, body: Any, query: dict[str, list[str]] | None = None) -> dict[str, Any]:
+        return query_service.pull_run_listing(self.app, query)
+
+    def _run_view(
+        self, body: Any, query: dict[str, list[str]] | None = None, code: str = ""
+    ) -> dict[str, Any]:
+        return query_service.pull_run_view(self.app, code)
+
+    def _advance(
+        self, body: Any, query: dict[str, list[str]] | None = None, code: str = ""
+    ) -> dict[str, Any]:
         return run_service.advance_run(self.app, code, body)
 
 
