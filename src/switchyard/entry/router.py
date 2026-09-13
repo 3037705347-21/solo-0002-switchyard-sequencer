@@ -42,6 +42,7 @@ class Router:
             Route("GET", r"/api/yard", self._yard),
             Route("POST", r"/api/shifts", self._open_shift),
             Route("GET", r"/api/shifts/(?P<code>[^/]+)", self._shift_view),
+            Route("POST", r"/api/shifts/(?P<code>[^/]+)/precheck", self._precheck_shift),
             Route("POST", r"/api/shifts/(?P<code>[^/]+)/close", self._close_shift),
             Route("POST", r"/api/intake-trains", self._create_intake),
             Route("POST", r"/api/intake-trains/(?P<code>[^/]+)/classify", self._classify),
@@ -71,6 +72,9 @@ class Router:
 
     def _shift_view(self, body: Any, code: str) -> dict[str, Any]:
         return shift_service.get_shift(self.app, code)
+
+    def _precheck_shift(self, body: Any, code: str) -> dict[str, Any]:
+        return closure_service.precheck_closure(self.app, code)
 
     def _close_shift(self, body: Any, code: str) -> dict[str, Any]:
         return closure_service.close_shift(self.app, code)

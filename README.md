@@ -28,6 +28,7 @@ PYTHONPATH=src python3 checks/wf_intake_classify.py
 PYTHONPATH=src python3 checks/wf_outbound_sequence.py
 PYTHONPATH=src python3 checks/wf_pull_depart.py
 PYTHONPATH=src python3 checks/wf_close_shift.py
+PYTHONPATH=src python3 checks/wf_closure_precheck.py
 ```
 
 Each check starts an isolated server on a free port with a temporary data
@@ -65,9 +66,15 @@ POST /api/outbound-trains
 POST /api/outbound-trains/OB-01/sequencer
 POST /api/pull-runs/RUN-01/advance
 POST /api/outbound-trains/OB-01/depart
+POST /api/shifts/SHIFT-01/precheck
 POST /api/shifts/SHIFT-01/close
 GET  /api/yard
 ```
+
+`POST /api/shifts/{code}/precheck` is an optional read-only preview before
+closing: it returns the same blockers a close would reject with, each with its
+related object, current state, and the next step that clears it. It never
+changes shifts, cars, runs, or events.
 
 Request and response examples are embedded in the project specification and in
 the workflow checks.

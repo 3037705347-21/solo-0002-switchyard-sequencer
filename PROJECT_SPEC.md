@@ -77,6 +77,15 @@ the train departed and move its cars into the departed state.
 
 Entry: `POST /api/shifts/{code}/close`, `GET /api/yard`
 
+Before requesting closure, the shift lead may run an optional precheck via
+`POST /api/shifts/{code}/precheck`. The precheck returns the same blocker list
+the close command would reject with — open intakes, undeparted outbounds,
+active pull runs, maintenance tracks still holding cars, and never-classified
+cars — each with its related object, current state, and the next step that
+clears it, ordered as a work list. The precheck is read-only: it never mutates
+shifts, cars, runs, or events, and the formal close still follows the rules
+below.
+
 The shift lead requests closure. The service computes standing, reserved,
 assembled, and departed car totals plus track occupancy and open-train counts.
 It blocks closure when any intake is open, any run is queued or running, or any
@@ -131,6 +140,7 @@ workspace snapshot and never mutate it.
 - `POST /api/outbound-trains/{code}/sequencer`: create a pull run.
 - `POST /api/pull-runs/{code}/advance`: execute the next pull actions.
 - `POST /api/outbound-trains/{code}/depart`: mark an assembled train departed.
+- `POST /api/shifts/{code}/precheck`: preview closure blockers without mutating state.
 - `POST /api/shifts/{code}/close`: create a closure snapshot.
 - `GET /api/yard`: return the full yard view.
 - `GET /api/shifts/{code}`: return shift details and recent events.

@@ -9,8 +9,26 @@ from ..domain.errors import NotFoundError, ResourceBusyError
 from ..domain.timeutil import now_iso
 from ..domain.transitions import transition_shift
 from ..report.closure import closure_blockers
+from ..report.precheck import closure_precheck
 from ..report.summary import snapshot_document
 from .context import YardApplication
+
+
+def precheck_closure(app: YardApplication, shift_code: str) -> dict[str, Any]:
+    """Preview closure blockers without mutating shifts, cars, runs, or events."""
+    workspace = app.load()
+    shift = workspace.shifts.get(shift_code)
+    if shift is None:
+        raise NotFoundError("shift", shift_code)
+    if shift.state == ShiftState.CLOSED:
+        raise ResourceBusyError("shift is already closed", shift_code=shift_code)
+    blockers = closure_precheck(workspace)
+    return {
+        "shift": shift.to_dict(),
+        "ready": not blockers,
+        "blocker_count": len(blockers),
+        "blockers": blockers,
+    }
 
 
 def close_shift(app: YardApplication, shift_code: str) -> dict[str, Any]:
@@ -51,4 +69,4 @@ def close_shift(app: YardApplication, shift_code: str) -> dict[str, Any]:
     }
 
 
-__all__ = ["close_shift"]
+__all__ = ["close_shift", "precheck_closure"]
