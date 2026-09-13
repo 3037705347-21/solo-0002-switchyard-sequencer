@@ -18,6 +18,7 @@ class StandingTrack:
     allowed_kinds: list[str] = field(default_factory=list)
     hazard_rated: bool = False
     stack: list[str] = field(default_factory=list)
+    note: str = ""
 
     def to_dict(self) -> dict[str, object]:
         return {
@@ -30,6 +31,7 @@ class StandingTrack:
             "allowed_kinds": list(self.allowed_kinds),
             "hazard_rated": self.hazard_rated,
             "stack": list(self.stack),
+            "note": self.note,
         }
 
     @classmethod
@@ -45,6 +47,7 @@ class StandingTrack:
             allowed_kinds=[str(item) for item in raw.get("allowed_kinds", [])],
             hazard_rated=bool(raw.get("hazard_rated", False)),
             stack=[str(item) for item in raw.get("stack", [])],
+            note=str(raw.get("note", "")),
         )
 
     def used_cars(self, car_lengths: dict[str, int]) -> int:

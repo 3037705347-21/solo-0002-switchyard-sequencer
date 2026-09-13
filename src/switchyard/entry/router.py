@@ -8,6 +8,7 @@ from typing import Any, Callable
 from ..domain.errors import DomainError, NotFoundError
 from ..service import (
     closure_service,
+    forecast_service,
     intake_service,
     outbound_service,
     query_service,
@@ -45,6 +46,8 @@ class Router:
             Route("POST", r"/api/shifts/(?P<code>[^/]+)/close", self._close_shift),
             Route("POST", r"/api/intake-trains", self._create_intake),
             Route("POST", r"/api/intake-trains/(?P<code>[^/]+)/classify", self._classify),
+            Route("POST", r"/api/arrival-forecast", self._arrival_forecast),
+            Route("POST", r"/api/tracks/(?P<code>[^/]+)/arrangement", self._arrange_track),
             Route("POST", r"/api/outbound-trains", self._create_outbound),
             Route("POST", r"/api/outbound-trains/(?P<code>[^/]+)/sequencer", self._sequence),
             Route("POST", r"/api/outbound-trains/(?P<code>[^/]+)/depart", self._depart),
@@ -80,6 +83,14 @@ class Router:
 
     def _classify(self, body: Any, code: str) -> dict[str, Any]:
         return intake_service.classify_intake_command(self.app, code)
+
+    def _arrival_forecast(self, body: Any) -> dict[str, Any]:
+        return forecast_service.arrival_forecast(self.app, body)
+
+    def _arrange_track(self, body: Any, code: str) -> dict[str, Any]:
+        payload = dict(body) if isinstance(body, dict) else {}
+        payload.setdefault("code", code)
+        return forecast_service.arrange_track(self.app, payload)
 
     def _create_outbound(self, body: Any) -> dict[str, Any]:
         return outbound_service.create_outbound(self.app, body)

@@ -17,6 +17,30 @@ Or use the environment variables `SWITCHYARD_PORT` and `SWITCHYARD_DATA_DIR`.
 The server exposes JSON endpoints under `/api`; `GET /api/health` returns a
 simple liveness payload.
 
+## Arrival capacity forecast
+
+Before submitting a manifest, dispatch can ask whether upcoming inbound trains
+still fit in the current shift:
+
+```text
+POST /api/arrival-forecast
+POST /api/tracks/{code}/arrangement
+```
+
+The forecast body carries `trains` (each with a `FCST-`/`INT-` code, arrival
+time, and the same car attributes used by intake) and an optional
+`shift_horizon_at`. The response reports, per train, the placeable count and a
+stable block reason per blocked car; per track it separates `current_*`
+occupancy from `planned_*` occupancy tagged `PLANNED_PERSISTED` (received but
+unclassified intakes) or `PLANNED_FORECAST` (trains in the request), and lists
+track types with room, exhausted track types, and unavailable tracks. The call
+is read-only and never creates or reserves anything.
+
+`POST /api/tracks/{code}/arrangement` persists a track's
+`state` (`OPERATIONAL`/`RESTRICTED`/`MAINTENANCE`) and/or
+`purpose` (`GENERAL`/`TRANSFER`); empty tracks can leave receiving service,
+and changes survive restarts so later forecasts stay consistent.
+
 ## Workflow checks
 
 Deferred test mode is active in this baseline: no unit tests are shipped, and a
@@ -28,6 +52,7 @@ PYTHONPATH=src python3 checks/wf_intake_classify.py
 PYTHONPATH=src python3 checks/wf_outbound_sequence.py
 PYTHONPATH=src python3 checks/wf_pull_depart.py
 PYTHONPATH=src python3 checks/wf_close_shift.py
+PYTHONPATH=src python3 checks/wf_arrival_forecast.py
 ```
 
 Each check starts an isolated server on a free port with a temporary data

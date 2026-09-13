@@ -6,8 +6,9 @@ import re
 from typing import Any
 
 from .car import CarInput, FreightCar
-from .enums import CarKind
+from .enums import CarKind, TrackPurpose, TrackState
 from .errors import ValidationError
+from .forecast import ProspectiveTrain
 from .intake import IntakeTrain
 from .outbound import OutboundTrain
 from .rules import (
@@ -76,7 +77,8 @@ def parse_car_input(raw: dict[str, Any]) -> CarInput:
     if not destination_known(destination_text):
         raise ValidationError("unknown destination", **{"destination": ["N4, E7, S2, or W9"]})
     length = require_integer(raw.get("length_m"), "length_m", MIN_CAR_LENGTH_M, MAX_CAR_LENGTH_M)
-    danger = require_text(raw.get("danger_class"), "danger_class", 8).upper()
+    danger_raw = raw.get("danger_class")
+    danger = "NONE" if danger_raw in (None, "") else require_text(danger_raw, "danger_class", 8).upper()
     if not hazard_known(danger):
         raise ValidationError("unknown hazard class", **{"danger_class": ["NONE, D1, or D2"]})
     loaded = require_boolean(raw.get("loaded"), "loaded", False)
@@ -190,10 +192,114 @@ def parse_transfer_code(raw: Any) -> str:
     return transfer
 
 
+def _parse_prospective_train(raw: Any, index: int, seen_codes: set[str]) -> ProspectiveTrain:
+    body = require_object(raw, f"trains[{index}]")
+    code = require_text(body.get("code"), f"trains[{index}].code").upper()
+    if not (is_entity_code(code, "FCST") or is_entity_code(code, "INT")):
+        raise ValidationError(
+            "invalid prospective train code",
+            **{f"trains[{index}].code": ["expected prefix FCST- or INT-"]},
+        )
+    route = require_text(body.get("route"), f"trains[{index}].route", 30).upper()
+    arrival = normalize_iso(require_text(body.get("arrival_at"), f"trains[{index}].arrival_at", 40))
+    cars_raw = body.get("cars")
+    if not isinstance(cars_raw, list) or not cars_raw:
+        raise ValidationError(
+            "at least one car is required",
+            **{f"trains[{index}].cars": ["must not be empty"]},
+        )
+    if len(cars_raw) > MAX_TRAIN_CONSIST:
+        raise ValidationError(
+            "too many cars",
+            **{f"trains[{index}].cars": [f"at most {MAX_TRAIN_CONSIST} cars per intake"]},
+        )
+    car_inputs: list[CarInput] = []
+    for car_index, item in enumerate(cars_raw):
+        try:
+            car_input = parse_car_input(require_object(item, f"trains[{index}].cars[{car_index}]"))
+        except ValidationError as exc:
+            prefixed = {
+                f"trains[{index}].cars[{car_index}].{key}": value
+                for key, value in exc.fields.items()
+            }
+            raise ValidationError(exc.message, fields=prefixed) from exc
+        if car_input.code in seen_codes:
+            raise ValidationError(
+                "duplicate car code in forecast request",
+                **{f"trains[{index}].cars[{car_index}].code": ["appears more than once"]},
+            )
+        seen_codes.add(car_input.code)
+        car_inputs.append(car_input)
+    return ProspectiveTrain(code=code, route=route, arrival_at=arrival, cars=car_inputs)
+
+
+def build_forecast_payload(raw: Any) -> tuple[list[ProspectiveTrain], str | None]:
+    body = require_object(raw, "payload")
+    trains_raw = body.get("trains")
+    if not isinstance(trains_raw, list) or not trains_raw:
+        raise ValidationError("at least one prospective train is required", **{"trains": ["must not be empty"]})
+    if len(trains_raw) > 10:
+        raise ValidationError("too many prospective trains", **{"trains": ["at most 10 trains per forecast"]})
+    seen_train_codes: set[str] = set()
+    seen_car_codes: set[str] = set()
+    trains: list[ProspectiveTrain] = []
+    for index, item in enumerate(trains_raw):
+        train = _parse_prospective_train(item, index, seen_car_codes)
+        if train.code in seen_train_codes:
+            raise ValidationError(
+                "duplicate prospective train code",
+                **{f"trains[{index}].code": ["appears more than once"]},
+            )
+        seen_train_codes.add(train.code)
+        trains.append(train)
+    horizon_raw = body.get("shift_horizon_at")
+    horizon = None
+    if horizon_raw not in (None, ""):
+        horizon = normalize_iso(require_text(horizon_raw, "shift_horizon_at", 40))
+    return trains, horizon
+
+
+def build_track_arrangement_payload(raw: Any) -> tuple[str, str | None, str | None, str]:
+    body = require_object(raw, "payload")
+    code = require_text(body.get("code"), "code", 24).upper()
+    if not is_entity_code(code, "TRK") and not re.fullmatch(r"[A-Z][A-Z0-9_-]{1,23}", code):
+        raise ValidationError(
+            "invalid track code",
+            **{"code": ["expected an existing yard track code"]},
+        )
+    state_raw = body.get("state")
+    state = None
+    if state_raw not in (None, ""):
+        state = require_text(state_raw, "state", 16).upper()
+        if state not in {item.value for item in TrackState}:
+            raise ValidationError(
+                "invalid track state",
+                **{"state": ["OPERATIONAL, RESTRICTED, or MAINTENANCE"]},
+            )
+    purpose_raw = body.get("purpose")
+    purpose = None
+    if purpose_raw not in (None, ""):
+        purpose = require_text(purpose_raw, "purpose", 16).upper()
+        if purpose not in {TrackPurpose.GENERAL.value, TrackPurpose.TRANSFER.value}:
+            raise ValidationError(
+                "invalid track purpose",
+                **{"purpose": ["GENERAL or TRANSFER (destination tracks cannot be reassigned)"]},
+            )
+    if state is None and purpose is None:
+        raise ValidationError(
+            "nothing to change",
+            **{"state": ["provide state and/or purpose"]},
+        )
+    note = str(body.get("note") or "").strip()[:200]
+    return code, state, purpose, note  # type: ignore[return-value]
+
+
 __all__ = [
+    "build_forecast_payload",
     "build_intake_payload",
     "build_outbound_payload",
     "build_shift_payload",
+    "build_track_arrangement_payload",
     "parse_advance_steps",
     "parse_car_input",
     "parse_transfer_code",

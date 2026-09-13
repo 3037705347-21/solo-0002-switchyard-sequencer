@@ -2,13 +2,13 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 from .car import FreightCar
-from .enums import CarState, IntakeState, TrackPurpose
+from .enums import CarState, IntakeState
 from .errors import ConflictError
 from .intake import IntakeTrain
-from .rules import candidate_tracks_for, remaining_capacity_score
+from .rules import ranked_candidate_tracks
 from .track import StandingTrack
 
 
@@ -28,15 +28,6 @@ class SpotRecord:
         }
 
 
-def _ranked_candidates(car: FreightCar, cars: dict[str, FreightCar], tracks: dict[str, StandingTrack]) -> list[StandingTrack]:
-    candidates = candidate_tracks_for(car, cars, tracks.values())
-    destination = [item for item in candidates if item.purpose == TrackPurpose.DESTINATION]
-    general = [item for item in candidates if item.purpose == TrackPurpose.GENERAL]
-    destination.sort(key=lambda item: remaining_capacity_score(item, cars), reverse=True)
-    general.sort(key=lambda item: remaining_capacity_score(item, cars), reverse=True)
-    return destination + general
-
-
 def classify_intake(
     train: IntakeTrain,
     cars: dict[str, FreightCar],
@@ -54,7 +45,7 @@ def classify_intake(
         if car.state != CarState.RECEIVED:
             unplaced.append(code)
             continue
-        ranked = _ranked_candidates(car, cars, tracks)
+        ranked = ranked_candidate_tracks(car, cars, tracks.values())
         target = ranked[0] if ranked else None
         if target is None:
             unplaced.append(code)

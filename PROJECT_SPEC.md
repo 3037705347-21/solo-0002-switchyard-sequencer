@@ -84,6 +84,38 @@ standing track is in maintenance with cars present. When the checks pass, it
 stores a `ClosureSnapshot`, records the closure event, and exposes the yard
 view for verification.
 
+### 5. Forecast arrival capacity before submitting a train
+
+Entry: `POST /api/arrival-forecast`,
+`POST /api/tracks/{code}/arrangement`
+
+Given known arrival times, the dispatcher asks whether the next inbound trains
+can still be classified inside the current shift before any manifest is
+submitted. The request carries one or more prospective trains (code with an
+`FCST-` or `INT-` prefix, arrival time, and car attributes) plus an optional
+shift horizon. The forecast merges them onto one timeline with already
+received but unclassified intakes, ordered by arrival time (train code breaks
+ties), and replays the same destination/hazard/capacity allocation that real
+classification uses on a deep copy of the yard. It never persists a car,
+intake, or plan.
+
+Each train reports the placeable car count, a per-car blocked list with a
+stable reason code (`TRACK_MAINTENANCE`, `TRACK_RESTRICTED`,
+`TRANSFER_PURPOSE`, `HAZARD_TRACK_UNAVAILABLE`, `HAZARD_CAPACITY_FULL`,
+`CAR_CAPACITY_FULL`, `LENGTH_CAPACITY_FULL`, `AFTER_SHIFT_HORIZON`, ...), and
+the projected track for every spot. Track rows strictly separate
+`current_*` occupancy (cars physically on the stack when the query runs)
+from `planned_*` occupancy (cars that only exist in persisted open intakes,
+tagged `PLANNED_PERSISTED`, or in the request itself, tagged
+`PLANNED_FORECAST`). The report also lists track types with remaining
+capacity and exhausted track types.
+
+A separate arrangement command persists maintenance/restriction state and
+general-to-transfer duty changes for a track. Empty tracks can leave
+receiving service; tracks with cars or an active pull reservation are
+rejected. Because arrangements are stored in the versioned workspace and
+journaled, the same forecast returns the same result after a service restart.
+
 ## State and rules
 
 - Shift state transitions from `open` to `closed` only through an approved
@@ -105,6 +137,12 @@ view for verification.
   is not reserved elsewhere and the transfer bay has enough capacity.
 - Closure is derived from the persisted workspace and never mutates car or
   track state.
+- Arrival forecasts are derived from a copied workspace: they never create
+  cars or intakes, never reserve capacity, and keep current occupancy separate
+  from planned occupancy (`PLANNED_PERSISTED` versus `PLANNED_FORECAST`).
+- Track arrangement changes (maintenance/restriction/transfer duty) are
+  journaled workspace updates; empty tracks only can leave receiving service,
+  and forecasts observe them consistently across service restarts.
 
 ## Modules and dependency direction
 
@@ -132,6 +170,11 @@ workspace snapshot and never mutate it.
 - `POST /api/pull-runs/{code}/advance`: execute the next pull actions.
 - `POST /api/outbound-trains/{code}/depart`: mark an assembled train departed.
 - `POST /api/shifts/{code}/close`: create a closure snapshot.
+- `POST /api/arrival-forecast`: read-only capacity forecast for prospective
+  inbound trains; reports placeable counts, block reasons, current versus
+  planned occupancy, and track types still free in the shift.
+- `POST /api/tracks/{code}/arrangement`: persist a maintenance/restriction or
+  transfer-duty arrangement change for a track.
 - `GET /api/yard`: return the full yard view.
 - `GET /api/shifts/{code}`: return shift details and recent events.
 
