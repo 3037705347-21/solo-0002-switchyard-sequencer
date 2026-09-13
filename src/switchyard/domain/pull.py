@@ -41,6 +41,11 @@ class PullRun:
     steps: list[MoveStep] = field(default_factory=list)
     state: RunState = RunState.QUEUED
     current_step: int = 0
+    required_cars: int = 0
+    transfer_capacity_cars: int = 0
+    transfer_available_cars: int = 0
+    transfer_mode: str = "EXPLICIT"
+    selection_reason: str = ""
     created_at: str = field(default_factory=now_iso)
     started_at: str | None = None
     completed_at: str | None = None
@@ -54,6 +59,11 @@ class PullRun:
             "steps": [step.to_dict() for step in self.steps],
             "state": str(self.state),
             "current_step": self.current_step,
+            "required_cars": self.required_cars,
+            "transfer_capacity_cars": self.transfer_capacity_cars,
+            "transfer_available_cars": self.transfer_available_cars,
+            "transfer_mode": self.transfer_mode,
+            "selection_reason": self.selection_reason,
             "created_at": self.created_at,
             "started_at": self.started_at,
             "completed_at": self.completed_at,
@@ -63,6 +73,11 @@ class PullRun:
     @classmethod
     def from_dict(cls, raw: dict[str, object]) -> "PullRun":
         steps = [MoveStep.from_dict(dict(item)) for item in raw.get("steps", [])]
+        # Runs persisted before transfer selection existed always named X1
+        # explicitly, so legacy records decode with explicit mode defaults.
+        mode = str(raw.get("transfer_mode", "EXPLICIT")).upper()
+        if mode not in {"AUTO", "EXPLICIT"}:
+            mode = "EXPLICIT"
         return cls(
             code=str(raw["code"]),
             outbound_code=str(raw["outbound_code"]),
@@ -70,6 +85,11 @@ class PullRun:
             steps=steps,
             state=RunState.parse(str(raw.get("state", RunState.QUEUED.value))),
             current_step=int(raw.get("current_step", 0)),
+            required_cars=int(raw.get("required_cars", 0)),
+            transfer_capacity_cars=int(raw.get("transfer_capacity_cars", 0)),
+            transfer_available_cars=int(raw.get("transfer_available_cars", 0)),
+            transfer_mode=mode,
+            selection_reason=str(raw.get("selection_reason", "")),
             created_at=str(raw.get("created_at", "")),
             started_at=None if raw.get("started_at") is None else str(raw["started_at"]),
             completed_at=None if raw.get("completed_at") is None else str(raw["completed_at"]),

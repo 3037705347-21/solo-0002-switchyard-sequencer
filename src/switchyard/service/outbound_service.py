@@ -93,28 +93,41 @@ def sequence_outbound(app: YardApplication, outbound_code: str, payload: Any) ->
             "outbound train already has a plan",
             **{"outbound_code": [f"current state is {outbound.state.value}"]},
         )
-    if transfer_code not in workspace.buffer_bays:
-        raise ValidationError("unknown transfer bay", **{"transfer_code": ["not found"]})
     run_code = f"RUN-{outbound.code}"
     if run_code in workspace.runs:
         raise ConflictError("pull run already exists", code=run_code)
-    run = plan_pull_run(
+    run, selection = plan_pull_run(
         run_code,
         outbound,
         workspace.cars,
         workspace.tracks,
         workspace.buffer_bays,
         transfer_code,
+        workspace.runs,
     )
     workspace.runs[run.code] = run
     event = workspace.record_event(
         shift_code,
         EventKind.PULL_PLANNED,
-        f"pull run {run.code} planned for {outbound.code}",
-        {"steps": len(run.steps), "transfer_code": transfer_code},
+        f"pull run {run.code} planned for {outbound.code} on {run.transfer_code}",
+        {
+            "steps": len(run.steps),
+            "transfer_code": run.transfer_code,
+            "transfer_mode": selection.mode,
+            "selection_reason": selection.reason,
+            "required_cars": selection.required_cars,
+            "capacity_cars": selection.capacity_cars,
+            "occupied_cars": selection.occupied_cars,
+            "reserved_cars": selection.reserved_cars,
+            "available_cars": selection.available_cars,
+        },
     )
     app.commit(workspace, event)
-    return {"pull_run": run.to_dict(), "outbound": outbound.to_dict()}
+    return {
+        "pull_run": run.to_dict(),
+        "outbound": outbound.to_dict(),
+        "transfer_selection": selection.to_dict(),
+    }
 
 
 __all__ = ["create_outbound", "sequence_outbound"]

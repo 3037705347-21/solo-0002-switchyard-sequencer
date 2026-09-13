@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from ..domain.enums import CarState, RunState, ShiftState
+from ..domain.transfer import bay_usage
 
 
 def yard_metrics(workspace: Any) -> dict[str, Any]:
@@ -34,15 +35,21 @@ def yard_metrics(workspace: Any) -> dict[str, Any]:
                 "top_car": track.top_code(),
             }
         )
-    bay_metrics = [
-        {
-            "code": bay.code,
-            "cars": len(bay.stack),
-            "capacity_cars": bay.capacity_cars,
-            "top_car": bay.top_code(),
-        }
-        for bay in workspace.buffer_bays.values()
-    ]
+    bay_metrics = []
+    for code in sorted(workspace.buffer_bays):
+        bay = workspace.buffer_bays[code]
+        usage = bay_usage(bay, workspace.runs)
+        bay_metrics.append(
+            {
+                "code": bay.code,
+                "cars": usage.occupied_cars,
+                "capacity_cars": bay.capacity_cars,
+                "reserved_cars": usage.reserved_cars,
+                "committed_cars": usage.committed_cars,
+                "available_cars": usage.available_cars,
+                "top_car": bay.top_code(),
+            }
+        )
     active_intakes = [code for code, train in workspace.intakes.items() if train.state.value in {"OPEN", "PARTIAL"}]
     active_outbounds = [
         code

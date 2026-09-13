@@ -70,13 +70,18 @@ class ApiClient:
 
 
 class RunningServer:
-    def __init__(self, data_dir: Path | str | None = None):
+    def __init__(self, data_dir: Path | str | None = None, extra_env: dict[str, str] | None = None):
         self.port = free_port()
         self.base_url = f"http://127.0.0.1:{self.port}"
-        self.temp_dir = tempfile.TemporaryDirectory(prefix="switchyard-check-")
-        data_dir = data_dir or Path(self.temp_dir.name) / "data"
+        self._temp_dir: tempfile.TemporaryDirectory | None = None
+        if data_dir is None:
+            self._temp_dir = tempfile.TemporaryDirectory(prefix="switchyard-check-")
+            data_dir = Path(self._temp_dir.name) / "data"
+        self.data_dir = Path(data_dir)
         env = dict(os.environ)
         env["PYTHONPATH"] = str(SRC_DIR)
+        if extra_env:
+            env.update(extra_env)
         self.process = subprocess.Popen(
             [
                 sys.executable,
@@ -87,7 +92,7 @@ class RunningServer:
                 "--port",
                 str(self.port),
                 "--data-dir",
-                str(data_dir),
+                str(self.data_dir),
             ],
             cwd=PROJECT_ROOT,
             env=env,
@@ -125,7 +130,8 @@ class RunningServer:
                 self.process.wait(timeout=5)
         if self.process.stdout:
             self.process.stdout.close()
-        self.temp_dir.cleanup()
+        if self._temp_dir is not None:
+            self._temp_dir.cleanup()
 
     def output(self) -> str:
         if self.process.stdout is None:
@@ -133,8 +139,17 @@ class RunningServer:
         return self.process.stdout.read()
 
 
-def run_check(check_name: str, fn: Any) -> int:
-    server = RunningServer()
+def start_server(
+    data_dir: Path | str | None = None,
+    extra_env: dict[str, str] | None = None,
+) -> RunningServer:
+    server = RunningServer(data_dir=data_dir, extra_env=extra_env)
+    server.wait_ready()
+    return server
+
+
+def run_check(check_name: str, fn: Any, extra_env: dict[str, str] | None = None) -> int:
+    server = RunningServer(extra_env=extra_env)
     try:
         server.wait_ready()
         fn(server.api)
@@ -144,4 +159,12 @@ def run_check(check_name: str, fn: Any) -> int:
         server.stop()
 
 
-__all__ = ["ApiClient", "PROJECT_ROOT", "RunningServer", "SRC_DIR", "free_port", "run_check"]
+__all__ = [
+    "ApiClient",
+    "PROJECT_ROOT",
+    "RunningServer",
+    "SRC_DIR",
+    "free_port",
+    "run_check",
+    "start_server",
+]

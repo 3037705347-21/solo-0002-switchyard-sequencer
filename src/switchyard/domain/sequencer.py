@@ -2,15 +2,15 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 from .car import FreightCar
 from .enums import CarState, MoveVerb, OutboundState
 from .errors import StateTransitionError, ValidationError
 from .outbound import OutboundTrain
 from .pull import MoveStep, PullRun
-from .timeutil import now_iso
 from .track import BufferBay, StandingTrack
+from .transfer import TransferSelection, select_transfer
 from .transitions import transition_car, transition_outbound
 
 
@@ -30,23 +30,27 @@ def _planning_failure(code: str, message: str, car_code: str | None = None, trac
     return PlanningFailure(code=code, message=message, car_code=car_code, track_code=track_code)
 
 
-def plan_pull_run(
-    run_code: str,
+@dataclass(frozen=True, slots=True)
+class PlannedAction:
+    """A verb/car/source triple derived before any transfer line is chosen."""
+
+    verb: MoveVerb
+    car_code: str
+    source_code: str
+
+
+def _simulate_pull(
     outbound: OutboundTrain,
     cars: dict[str, FreightCar],
     tracks: dict[str, StandingTrack],
-    transfer_bays: dict[str, BufferBay],
-    transfer_code: str,
-) -> PullRun:
-    if outbound.state != OutboundState.DRAFT:
-        raise StateTransitionError("outbound train", str(outbound.state), "PLANNED", "already has a plan")
+) -> tuple[list[PlannedAction], int]:
+    """Validate the LIFO stacks and derive actions, independent of the bay.
+
+    Returns every planned action (buffer/pull/return in execution order) and
+    the peak number of cars that must sit on the transfer line at once.
+    """
     planned = list(outbound.planned_car_codes)
-    if not planned:
-        raise ValidationError("outbound train has no planned cars", **{"car_codes": ["must not be empty"]})
     planned_set = set(planned)
-    transfer = transfer_bays.get(transfer_code)
-    if transfer is None:
-        raise ValidationError("unknown transfer bay", **{"transfer_code": ["not found"]})
     working_stacks: dict[str, list[str]] = {}
     source_of: dict[str, str] = {}
     for code in planned:
@@ -70,7 +74,7 @@ def plan_pull_run(
         if code not in stack:
             _fail(_planning_failure("car-not-in-stack", f"car {code} is not in track {location}", code, location))
         source_of[code] = location
-    steps: list[MoveStep] = []
+    actions: list[PlannedAction] = []
     max_blockers = 0
     for code in planned:
         source_code = source_of[code]
@@ -100,25 +104,60 @@ def plan_pull_run(
                         source_code,
                     )
                 )
-            steps.append(MoveStep(MoveVerb.BUFFER, blocker, source_code, transfer.code))
-        steps.append(MoveStep(MoveVerb.PULL, code, source_code, outbound.code))
+            actions.append(PlannedAction(MoveVerb.BUFFER, blocker, source_code))
+        actions.append(PlannedAction(MoveVerb.PULL, code, source_code))
         for blocker in above:
-            steps.append(MoveStep(MoveVerb.RETURN, blocker, transfer.code, source_code))
+            actions.append(PlannedAction(MoveVerb.RETURN, blocker, source_code))
         del stack[bottom_index]
-    if max_blockers > transfer.capacity_cars:
-        _fail(
-            _planning_failure(
-                "buffer-overflow",
-                f"transfer bay {transfer.code} needs {max_blockers} slots but has {transfer.capacity_cars}",
-                track_code=transfer.code,
-            )
-        )
-    run = PullRun(code=run_code, outbound_code=outbound.code, transfer_code=transfer.code, steps=steps)
+    return actions, max_blockers
+
+
+def _build_steps(actions: list[PlannedAction], outbound: OutboundTrain, transfer_code: str) -> list[MoveStep]:
+    steps: list[MoveStep] = []
+    for action in actions:
+        if action.verb == MoveVerb.BUFFER:
+            steps.append(MoveStep(MoveVerb.BUFFER, action.car_code, action.source_code, transfer_code))
+        elif action.verb == MoveVerb.PULL:
+            steps.append(MoveStep(MoveVerb.PULL, action.car_code, action.source_code, outbound.code))
+        else:
+            steps.append(MoveStep(MoveVerb.RETURN, action.car_code, transfer_code, action.source_code))
+    return steps
+
+
+def plan_pull_run(
+    run_code: str,
+    outbound: OutboundTrain,
+    cars: dict[str, FreightCar],
+    tracks: dict[str, StandingTrack],
+    transfer_bays: dict[str, BufferBay],
+    transfer_code: str | None,
+    runs: dict[str, PullRun] | None = None,
+) -> tuple[PullRun, TransferSelection]:
+    if outbound.state != OutboundState.DRAFT:
+        raise StateTransitionError("outbound train", str(outbound.state), "PLANNED", "already has a plan")
+    planned = list(outbound.planned_car_codes)
+    if not planned:
+        raise ValidationError("outbound train has no planned cars", **{"car_codes": ["must not be empty"]})
+    active_runs = runs or {}
+    actions, required_cars = _simulate_pull(outbound, cars, tracks)
+    selection = select_transfer(transfer_code, required_cars, transfer_bays, active_runs)
+    steps = _build_steps(actions, outbound, selection.transfer_code)
+    run = PullRun(
+        code=run_code,
+        outbound_code=outbound.code,
+        transfer_code=selection.transfer_code,
+        steps=steps,
+        required_cars=required_cars,
+        transfer_capacity_cars=selection.capacity_cars,
+        transfer_available_cars=selection.available_cars,
+        transfer_mode=selection.mode,
+        selection_reason=selection.reason,
+    )
     for code in planned:
         transition_car(cars[code], CarState.RESERVED)
     transition_outbound(outbound, OutboundState.PLANNED)
     outbound.run_codes.append(run.code)
-    return run
+    return run, selection
 
 
 def can_sequence(

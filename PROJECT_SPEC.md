@@ -103,6 +103,13 @@ view for verification.
 - Track spotting cannot exceed car count or total length capacity.
 - A pull plan is valid only when every buffer move targets a standing car that
   is not reserved elsewhere and the transfer bay has enough capacity.
+- The sequencer request carries an optional `transfer_code`. When absent, the
+  transfer line is selected automatically by current available capacity (peak
+  reservations of queued and running plans are committed first; line code
+  breaks ties); when present, the line must exist and have enough capacity or
+  the request is rejected without changing the draft. The persisted pull run
+  records the selected line, selection mode, required slots, and the capacity
+  snapshot so it remains traceable through execution, retry, and restart.
 - Closure is derived from the persisted workspace and never mutates car or
   track state.
 

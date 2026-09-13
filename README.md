@@ -28,6 +28,7 @@ PYTHONPATH=src python3 checks/wf_intake_classify.py
 PYTHONPATH=src python3 checks/wf_outbound_sequence.py
 PYTHONPATH=src python3 checks/wf_pull_depart.py
 PYTHONPATH=src python3 checks/wf_close_shift.py
+PYTHONPATH=src python3 checks/wf_transfer_selection.py
 ```
 
 Each check starts an isolated server on a free port with a temporary data
@@ -54,6 +55,24 @@ replace, so interrupted writes do not leave partial state.
 - `SWITCHYARD_PORT`: default service port, used when `--port` is absent.
 - `SWITCHYARD_DATA_DIR`: default data directory, used when `--data-dir` is
   absent.
+- `SWITCHYARD_TRANSFER_BAYS`: extra transfer lines for a fresh data directory,
+  as comma-separated `CODE:CAPACITY` entries (for example
+  `X1:10,X2:6`). A fresh yard seeds a single `X1` line when unset.
+
+## Transfer line selection
+
+`POST /api/outbound-trains/{code}/sequencer` accepts an optional
+`transfer_code`. When it is omitted or blank, the sequencer binds the plan to
+the transfer line with the most currently available slots (line code breaks
+ties), so future lines are picked up automatically. An explicit code is still
+validated strictly: an unknown line or insufficient remaining capacity rejects
+the request and leaves the outbound train in `DRAFT` for a corrected retry.
+Capacity already committed to queued and running plans is reserved by peak
+buffer usage, so an automatic choice never silently moves or shrinks an
+existing plan's occupancy. The response includes a `transfer_selection` block,
+and the persisted pull run records the selected line, mode, required slots, and
+capacity snapshot, keeping the choice traceable through execution, retry, and
+restart.
 
 ## Example API sequence
 

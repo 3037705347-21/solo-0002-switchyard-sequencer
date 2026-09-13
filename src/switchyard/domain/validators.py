@@ -182,11 +182,25 @@ def parse_advance_steps(raw: Any) -> int:
     return require_integer(steps, "steps", 1, 200)
 
 
-def parse_transfer_code(raw: Any) -> str:
+def parse_transfer_code(raw: Any) -> str | None:
+    """Return the requested transfer line, or None for automatic selection.
+
+    Omitting ``transfer_code`` (or sending an empty value) keeps the request
+    compatible with clients that never named a line; an explicit value is
+    trimmed and format-checked, with existence and capacity enforced later.
+    """
     body = require_object(raw, "payload")
-    transfer = require_text(body.get("transfer_code"), "transfer_code").upper()
+    value = body.get("transfer_code")
+    if value is None:
+        return None
+    if not isinstance(value, str) or not value.strip():
+        return None
+    transfer = value.strip().upper()
     if not re.fullmatch(r"[A-Z][A-Z0-9]{0,8}", transfer):
-        raise ValidationError("invalid transfer code", **{"transfer_code": ["expected short bay code"]})
+        raise ValidationError(
+            "invalid transfer code",
+            fields={"transfer_code": ["expected short bay code"]},
+        )
     return transfer
 
 
