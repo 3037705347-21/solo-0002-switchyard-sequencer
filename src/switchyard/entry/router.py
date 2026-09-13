@@ -20,10 +20,11 @@ Handler = Callable[..., Any]
 
 
 class Route:
-    def __init__(self, method: str, pattern: str, handler: Handler):
+    def __init__(self, method: str, pattern: str, handler: Handler, accepts_query: bool = False):
         self.method = method
         self.pattern = re.compile(pattern)
         self.handler = handler
+        self.accepts_query = accepts_query
 
     def match(self, method: str, path: str) -> dict[str, str] | None:
         if method != self.method:
@@ -41,7 +42,7 @@ class Router:
             Route("GET", r"/api/health", self._health),
             Route("GET", r"/api/yard", self._yard),
             Route("POST", r"/api/shifts", self._open_shift),
-            Route("GET", r"/api/shifts/(?P<code>[^/]+)", self._shift_view),
+            Route("GET", r"/api/shifts/(?P<code>[^/]+)", self._shift_view, accepts_query=True),
             Route("POST", r"/api/shifts/(?P<code>[^/]+)/close", self._close_shift),
             Route("POST", r"/api/intake-trains", self._create_intake),
             Route("POST", r"/api/intake-trains/(?P<code>[^/]+)/classify", self._classify),
@@ -51,12 +52,15 @@ class Router:
             Route("POST", r"/api/pull-runs/(?P<code>[^/]+)/advance", self._advance),
         ]
 
-    def dispatch(self, method: str, path: str, body: Any) -> tuple[int, dict[str, Any]]:
+    def dispatch(self, method: str, path: str, body: Any, query: dict[str, Any] | None = None) -> tuple[int, dict[str, Any]]:
         for route in self.routes:
             args = route.match(method, path)
             if args is None:
                 continue
-            value = route.handler(body, **args)
+            if route.accepts_query:
+                value = route.handler(body, query or {}, **args)
+            else:
+                value = route.handler(body, **args)
             return 200, {"ok": True, "data": value}
         raise NotFoundError("route", f"{method} {path}")
 
@@ -69,8 +73,8 @@ class Router:
     def _open_shift(self, body: Any) -> dict[str, Any]:
         return shift_service.open_shift(self.app, body)
 
-    def _shift_view(self, body: Any, code: str) -> dict[str, Any]:
-        return shift_service.get_shift(self.app, code)
+    def _shift_view(self, body: Any, query: dict[str, Any], code: str) -> dict[str, Any]:
+        return shift_service.get_shift(self.app, code, query)
 
     def _close_shift(self, body: Any, code: str) -> dict[str, Any]:
         return closure_service.close_shift(self.app, code)

@@ -14,36 +14,41 @@ from .context import YardApplication
 
 
 def close_shift(app: YardApplication, shift_code: str) -> dict[str, Any]:
-    workspace = app.load()
-    shift = workspace.shifts.get(shift_code)
-    if shift is None:
-        raise NotFoundError("shift", shift_code)
-    if shift.state == ShiftState.CLOSED:
-        raise ResourceBusyError("shift is already closed", shift_code=shift_code)
-    blockers = closure_blockers(workspace)
-    if blockers:
-        event = workspace.record_event(
+    with app.update(persist_on_error=True) as workspace:
+        shift = workspace.shifts.get(shift_code)
+        if shift is None:
+            raise NotFoundError("shift", shift_code)
+        if shift.state == ShiftState.CLOSED:
+            raise ResourceBusyError("shift is already closed", shift_code=shift_code)
+        blockers = closure_blockers(workspace)
+        if blockers:
+            workspace.record_event(
+                shift_code,
+                EventKind.CLOSURE_BLOCKED,
+                f"closure for {shift_code} blocked by {len(blockers)} item(s)",
+                {
+                    "blockers": blockers,
+                    "shift_code": shift_code,
+                },
+            )
+            raise ResourceBusyError("shift closure is blocked", blockers=blockers)
+        snapshot_code = f"SNAP-{shift_code}"
+        document = snapshot_document(workspace, shift_code, snapshot_code)
+        workspace.closure_snapshots.append(document)
+        closed_at = now_iso()
+        transition_shift(shift, ShiftState.CLOSED)
+        shift.closed_at = closed_at
+        shift.closure_snapshot_code = snapshot_code
+        workspace.record_event(
             shift_code,
-            EventKind.CLOSURE_BLOCKED,
-            f"closure for {shift_code} blocked by {len(blockers)} item(s)",
-            {"blockers": blockers},
+            EventKind.SHIFT_CLOSED,
+            f"shift {shift_code} closed",
+            {
+                "snapshot_code": snapshot_code,
+                "closed_at": closed_at,
+                "shift_code": shift_code,
+            },
         )
-        app.commit(workspace, event)
-        raise ResourceBusyError("shift closure is blocked", blockers=blockers)
-    snapshot_code = f"SNAP-{shift_code}"
-    document = snapshot_document(workspace, shift_code, snapshot_code)
-    workspace.closure_snapshots.append(document)
-    closed_at = now_iso()
-    transition_shift(shift, ShiftState.CLOSED)
-    shift.closed_at = closed_at
-    shift.closure_snapshot_code = snapshot_code
-    event = workspace.record_event(
-        shift_code,
-        EventKind.SHIFT_CLOSED,
-        f"shift {shift_code} closed",
-        {"snapshot_code": snapshot_code, "closed_at": closed_at},
-    )
-    app.commit(workspace, event)
     return {
         "shift": shift.to_dict(),
         "snapshot": document,

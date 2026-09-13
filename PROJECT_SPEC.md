@@ -133,7 +133,10 @@ workspace snapshot and never mutate it.
 - `POST /api/outbound-trains/{code}/depart`: mark an assembled train departed.
 - `POST /api/shifts/{code}/close`: create a closure snapshot.
 - `GET /api/yard`: return the full yard view.
-- `GET /api/shifts/{code}`: return shift details and recent events.
+- `GET /api/shifts/{code}`: return shift details and recent events. With
+  `kind`, `start_at`/`end_at`, `object_code`, `limit`, and `cursor` query
+  parameters it returns filtered, append-stable keyset pages instead; each
+  event is annotated with its relationship to the subject's current state.
 
 The service listens on a local port chosen through `--port` or the
 `SWITCHYARD_PORT` environment variable. Data is stored under `--data-dir` or

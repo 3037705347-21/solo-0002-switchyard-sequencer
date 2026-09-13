@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
+from urllib.parse import parse_qs, urlsplit
 
 from ..domain.errors import DomainError
 from ..service.context import YardApplication
@@ -44,7 +45,9 @@ class YardRequestHandler(BaseHTTPRequestHandler):
             length = int(self.headers.get("Content-Length") or 0)
             raw_body = self.rfile.read(length) if length > 0 else b""
             body = parse_body(raw_body, self.headers.get("Content-Type"))
-            status, payload = self.server.router.dispatch(method, self.path, body)
+            parts = urlsplit(self.path)
+            query = {key: values[0] if len(values) == 1 else values for key, values in parse_qs(parts.query).items()}
+            status, payload = self.server.router.dispatch(method, parts.path, body, query)
             self._send_json(status, payload)
         except DomainError as exc:
             self._send_json(exc.status, {"ok": False, "error": exc.as_dict()})
