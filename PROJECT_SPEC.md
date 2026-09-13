@@ -36,6 +36,10 @@ state as JSON files under a configurable data directory.
   from a validated outbound plan.
 - `ClosureSnapshot`: an immutable metric set and blocker list produced when a
   shift closes.
+- `SnapshotCorrection`: an append-only revision of a closure snapshot's
+  explanatory fields (`remark`, `responsible`). It references the original
+  snapshot, records the replaced values, the difference reason, the reviser,
+  and an idempotency key, and never changes archived metrics or events.
 
 ## Workflows
 
@@ -132,6 +136,15 @@ workspace snapshot and never mutate it.
 - `POST /api/pull-runs/{code}/advance`: execute the next pull actions.
 - `POST /api/outbound-trains/{code}/depart`: mark an assembled train departed.
 - `POST /api/shifts/{code}/close`: create a closure snapshot.
+- `GET /api/closure-snapshots`: list original snapshots and correction records
+  as a typed, ordered stream.
+- `GET /api/closure-snapshots/{code}`: return a snapshot's archived values, its
+  correction chain, and the effective revised explanatory values.
+- `GET /api/closure-snapshots/{code}/export`: export archived data separately
+  from revised values for downstream verification.
+- `POST /api/closure-snapshots/{code}/corrections`: append a controlled
+  correction; only `remark` and `responsible` may change, and an identical
+  resubmission replays the same revision.
 - `GET /api/yard`: return the full yard view.
 - `GET /api/shifts/{code}`: return shift details and recent events.
 

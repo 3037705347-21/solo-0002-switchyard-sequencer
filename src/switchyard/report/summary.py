@@ -16,13 +16,21 @@ def build_summary(workspace: Any, shift_code: str) -> dict[str, Any]:
     }
 
 
-def snapshot_document(workspace: Any, shift_code: str, snapshot_code: str) -> dict[str, Any]:
+def snapshot_document(
+    workspace: Any,
+    shift_code: str,
+    snapshot_code: str,
+    remark: str = "",
+    responsible: str = "",
+) -> dict[str, Any]:
     return {
         "code": snapshot_code,
         "shift_code": shift_code,
         "metrics": yard_metrics(workspace),
         "blockers": [],
         "version": workspace.version,
+        "remark": remark,
+        "responsible": responsible,
     }
 
 

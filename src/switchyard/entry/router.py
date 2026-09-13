@@ -8,6 +8,7 @@ from typing import Any, Callable
 from ..domain.errors import DomainError, NotFoundError
 from ..service import (
     closure_service,
+    correction_service,
     intake_service,
     outbound_service,
     query_service,
@@ -43,6 +44,18 @@ class Router:
             Route("POST", r"/api/shifts", self._open_shift),
             Route("GET", r"/api/shifts/(?P<code>[^/]+)", self._shift_view),
             Route("POST", r"/api/shifts/(?P<code>[^/]+)/close", self._close_shift),
+            Route("GET", r"/api/closure-snapshots", self._snapshot_listing),
+            Route(
+                "GET",
+                r"/api/closure-snapshots/(?P<code>[^/]+)/export",
+                self._snapshot_export,
+            ),
+            Route(
+                "POST",
+                r"/api/closure-snapshots/(?P<code>[^/]+)/corrections",
+                self._snapshot_correct,
+            ),
+            Route("GET", r"/api/closure-snapshots/(?P<code>[^/]+)", self._snapshot_view),
             Route("POST", r"/api/intake-trains", self._create_intake),
             Route("POST", r"/api/intake-trains/(?P<code>[^/]+)/classify", self._classify),
             Route("POST", r"/api/outbound-trains", self._create_outbound),
@@ -73,7 +86,19 @@ class Router:
         return shift_service.get_shift(self.app, code)
 
     def _close_shift(self, body: Any, code: str) -> dict[str, Any]:
-        return closure_service.close_shift(self.app, code)
+        return closure_service.close_shift(self.app, code, body)
+
+    def _snapshot_listing(self, body: Any) -> dict[str, Any]:
+        return correction_service.list_snapshots(self.app)
+
+    def _snapshot_view(self, body: Any, code: str) -> dict[str, Any]:
+        return correction_service.get_snapshot(self.app, code)
+
+    def _snapshot_export(self, body: Any, code: str) -> dict[str, Any]:
+        return correction_service.export_snapshot(self.app, code)
+
+    def _snapshot_correct(self, body: Any, code: str) -> dict[str, Any]:
+        return correction_service.correct_snapshot(self.app, code, body)
 
     def _create_intake(self, body: Any) -> dict[str, Any]:
         return intake_service.create_intake(self.app, body)

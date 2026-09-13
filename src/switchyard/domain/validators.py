@@ -190,7 +190,49 @@ def parse_transfer_code(raw: Any) -> str:
     return transfer
 
 
+def build_correction_payload(raw: Any) -> tuple[dict[str, str], str, str, str | None]:
+    """Validate a snapshot correction request.
+
+    Only explanatory fields may be revised; keys outside that set (metrics,
+    blockers, version, event data, ...) are rejected rather than ignored so a
+    caller cannot believe it changed archived numbers.
+    """
+    from .correction import CORRECTABLE_FIELDS, MAX_IDEMPOTENCY_KEY_LENGTH
+
+    body = require_object(raw, "payload")
+    changes_raw = body.get("changes")
+    changes_object = require_object(changes_raw, "changes")
+    unknown = sorted(name for name in changes_object if name not in CORRECTABLE_FIELDS)
+    if unknown:
+        fields = {f"changes.{name}": ["only remark and responsible may be corrected"] for name in unknown}
+        raise ValidationError("corrections may only touch explanatory fields", fields=fields)
+    changes: dict[str, str] = {}
+    for name in CORRECTABLE_FIELDS:
+        if name in changes_object:
+            value = changes_object[name]
+            if not isinstance(value, str):
+                raise ValidationError(
+                    f"changes.{name} must be text",
+                    **{f"changes.{name}": ["must be a string"]},
+                )
+            value = value.strip()
+            if value:
+                changes[name] = value[:500]
+    if not changes:
+        raise ValidationError(
+            "at least one explanatory field must change",
+            fields={"changes": ["remark or responsible must be provided"]},
+        )
+    reason = require_text(body.get("reason"), "reason", 500)
+    revised_by = require_text(body.get("revised_by"), "revised_by", 30)
+    idempotency_key = None
+    if body.get("idempotency_key") is not None:
+        idempotency_key = require_text(body.get("idempotency_key"), "idempotency_key", MAX_IDEMPOTENCY_KEY_LENGTH)
+    return changes, reason, revised_by, idempotency_key
+
+
 __all__ = [
+    "build_correction_payload",
     "build_intake_payload",
     "build_outbound_payload",
     "build_shift_payload",
