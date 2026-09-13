@@ -62,7 +62,7 @@ def classify_intake_command(app: YardApplication, intake_code: str) -> dict[str,
     missing = [code for code in train.consist if code not in workspace.cars]
     if missing:
         raise ValidationError("consist references missing cars", **{"consist": missing})
-    spots = classify_intake(train, workspace.cars, workspace.tracks)
+    result = classify_intake(train, workspace.cars, workspace.tracks)
     if train.unplaced:
         message = f"intake {train.code} partially classified with {len(train.unplaced)} unplaced cars"
     else:
@@ -72,16 +72,18 @@ def classify_intake_command(app: YardApplication, intake_code: str) -> dict[str,
         EventKind.TRAIN_CLASSIFIED,
         message,
         {
-            "spotted": len(spots),
+            "spotted": len(result.spots),
             "unplaced": list(train.unplaced),
-            "spots": [item.to_dict() for item in spots],
+            "spots": [item.to_dict() for item in result.spots],
+            "tradeoffs": list(result.tradeoffs),
         },
     )
     app.commit(workspace, event)
     return {
         "intake": train.to_dict(),
-        "spots": [item.to_dict() for item in spots],
+        "spots": [item.to_dict() for item in result.spots],
         "unplaced": list(train.unplaced),
+        "tradeoffs": list(result.tradeoffs),
     }
 
 
