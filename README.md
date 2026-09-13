@@ -28,6 +28,7 @@ PYTHONPATH=src python3 checks/wf_intake_classify.py
 PYTHONPATH=src python3 checks/wf_outbound_sequence.py
 PYTHONPATH=src python3 checks/wf_pull_depart.py
 PYTHONPATH=src python3 checks/wf_close_shift.py
+PYTHONPATH=src python3 checks/wf_handoff_briefing.py
 ```
 
 Each check starts an isolated server on a free port with a temporary data
@@ -65,9 +66,21 @@ POST /api/outbound-trains
 POST /api/outbound-trains/OB-01/sequencer
 POST /api/pull-runs/RUN-01/advance
 POST /api/outbound-trains/OB-01/depart
+GET  /api/handoff-briefing
 POST /api/shifts/SHIFT-01/close
 GET  /api/yard
 ```
+
+## Shift handover briefing
+
+`GET /api/handoff-briefing` projects a one-page briefing for the current open
+shift; `GET /api/shifts/SHIFT-01/handoff-briefing` returns the briefing for a
+specific shift, including closed shifts. The briefing is read-only: it only
+reads persisted state and events, never records an event, and reports
+in-progress pull tickets and drafts as pending rather than finished. Each
+section entry carries its object code and `last_event_at`, and the header
+carries `briefing_version`, `source_event_sequence`, and `generated_at` so
+copies generated later in the same shift can be checked for staleness.
 
 Request and response examples are embedded in the project specification and in
 the workflow checks.

@@ -8,6 +8,7 @@ from typing import Any, Callable
 from ..domain.errors import DomainError, NotFoundError
 from ..service import (
     closure_service,
+    handoff_service,
     intake_service,
     outbound_service,
     query_service,
@@ -40,8 +41,10 @@ class Router:
         self.routes = [
             Route("GET", r"/api/health", self._health),
             Route("GET", r"/api/yard", self._yard),
+            Route("GET", r"/api/handoff-briefing", self._current_briefing),
             Route("POST", r"/api/shifts", self._open_shift),
             Route("GET", r"/api/shifts/(?P<code>[^/]+)", self._shift_view),
+            Route("GET", r"/api/shifts/(?P<code>[^/]+)/handoff-briefing", self._shift_briefing),
             Route("POST", r"/api/shifts/(?P<code>[^/]+)/close", self._close_shift),
             Route("POST", r"/api/intake-trains", self._create_intake),
             Route("POST", r"/api/intake-trains/(?P<code>[^/]+)/classify", self._classify),
@@ -71,6 +74,12 @@ class Router:
 
     def _shift_view(self, body: Any, code: str) -> dict[str, Any]:
         return shift_service.get_shift(self.app, code)
+
+    def _current_briefing(self, body: Any) -> dict[str, Any]:
+        return handoff_service.current_handoff_briefing(self.app)
+
+    def _shift_briefing(self, body: Any, code: str) -> dict[str, Any]:
+        return handoff_service.shift_handoff_briefing(self.app, code)
 
     def _close_shift(self, body: Any, code: str) -> dict[str, Any]:
         return closure_service.close_shift(self.app, code)

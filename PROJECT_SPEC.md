@@ -134,6 +134,19 @@ workspace snapshot and never mutate it.
 - `POST /api/shifts/{code}/close`: create a closure snapshot.
 - `GET /api/yard`: return the full yard view.
 - `GET /api/shifts/{code}`: return shift details and recent events.
+- `GET /api/handoff-briefing`: project the current open shift handover briefing.
+- `GET /api/shifts/{code}/handoff-briefing`: project a shift handover briefing
+  by code (works for open and closed shifts).
+
+The handover briefing is a read-only projection over persisted state and the
+shift event trail. It groups received cars, classified cars, still-pending
+trains and drafts, assembled-but-not-departed outbound trains, queued or
+running pull tickets, departed trains, and remaining closure blockers; every
+entry carries its object code and the last event timestamp. The response also
+carries `briefing_version`, `source_event_sequence`, and `generated_at`, so a
+shift lead re-generating the briefing at different times can tell whether an
+earlier copy is stale. Generating a briefing never writes an event and never
+marks unfinished work complete.
 
 The service listens on a local port chosen through `--port` or the
 `SWITCHYARD_PORT` environment variable. Data is stored under `--data-dir` or
