@@ -10,6 +10,7 @@ from .track import StandingTrack
 
 DESTINATION_CODES = ("N4", "E7", "S2", "W9")
 HAZARD_CLASSES = ("NONE", "D1", "D2")
+HAZARD_RANK = {"NONE": 0, "D1": 1, "D2": 2}
 ALL_KINDS = {item.value for item in CarKind}
 MAX_TRAIN_CONSIST = 20
 MAX_CAR_LENGTH_M = 35
@@ -34,6 +35,10 @@ def kind_known(value: str) -> bool:
 
 def hazard_known(value: str) -> bool:
     return value.strip().upper() in HAZARD_CLASSES
+
+
+def hazard_rank(value: str) -> int:
+    return HAZARD_RANK.get(value.strip().upper(), 0)
 
 
 def is_car_code(value: str) -> bool:
@@ -123,6 +128,7 @@ __all__ = [
     "DEFAULT_BUFFER_CAPACITY",
     "DESTINATION_CODES",
     "HAZARD_CLASSES",
+    "HAZARD_RANK",
     "MAX_CAR_LENGTH_M",
     "MAX_PLANNED_CARS",
     "MAX_TRAIN_CONSIST",
@@ -133,6 +139,7 @@ __all__ = [
     "destination_known",
     "hazard_allowed",
     "hazard_known",
+    "hazard_rank",
     "is_car_code",
     "is_entity_code",
     "kind_allowed",

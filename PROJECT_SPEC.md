@@ -84,6 +84,19 @@ standing track is in maintenance with cars present. When the checks pass, it
 stores a `ClosureSnapshot`, records the closure event, and exposes the yard
 view for verification.
 
+### 5. Review hazardous goods compliance
+
+Entry: `GET /api/hazard-review`
+
+The duty officer asks for a hazard compliance review at any time. The service
+reads the persisted workspace and checks every hazardous car standing on a
+track against the yard acceptance rules: track hazard rating, destination
+affinity, load state, and in-stack neighbors. Each finding names the car and
+the track, cites the applied rule plus the concrete values that triggered it,
+and is graded `BLOCKING` when it already affects the current consist or
+`WATCH` when it only needs duty attention. The review never mutates yard
+state and always returns the same document for the same workspace.
+
 ## State and rules
 
 - Shift state transitions from `open` to `closed` only through an approved
@@ -105,6 +118,14 @@ view for verification.
   is not reserved elsewhere and the transfer bay has enough capacity.
 - Closure is derived from the persisted workspace and never mutates car or
   track state.
+- A loaded hazardous car on a track without a hazard rating is a blocking
+  finding; an empty one is a watch finding.
+- A hazardous car whose destination differs from its destination track is a
+  blocking finding.
+- A hazardous car next to a non-hazardous car, or next to a hazardous car of a
+  different danger class, is a watch finding.
+- The hazard review is derived from the persisted workspace, never mutates car
+  or track state, and is stable across repeated runs over the same state.
 
 ## Modules and dependency direction
 
@@ -133,6 +154,7 @@ workspace snapshot and never mutate it.
 - `POST /api/outbound-trains/{code}/depart`: mark an assembled train departed.
 - `POST /api/shifts/{code}/close`: create a closure snapshot.
 - `GET /api/yard`: return the full yard view.
+- `GET /api/hazard-review`: return the hazardous goods compliance review.
 - `GET /api/shifts/{code}`: return shift details and recent events.
 
 The service listens on a local port chosen through `--port` or the

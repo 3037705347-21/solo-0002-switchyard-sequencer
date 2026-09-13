@@ -26,7 +26,7 @@
     {
       "id": "report",
       "path": "src/switchyard/report",
-      "responsibility": "yard metrics, closure blockers, and deterministic summaries"
+      "responsibility": "yard metrics, closure blockers, hazard compliance review, and deterministic summaries"
     }
   ],
   "complexity": {
@@ -94,6 +94,20 @@
       "failure": "open work or an occupied maintenance track prevents closure",
       "verification": "workflow check closes a shift and verifies the returned yard balance",
       "module_ids": ["entry", "service", "domain", "storage", "report"]
+    },
+    {
+      "id": "review-hazard-compliance",
+      "name": "Review hazardous goods compliance",
+      "entry": "GET /api/hazard-review",
+      "steps": [
+        "load the persisted workspace without mutating it",
+        "check hazardous cars against track hazard ratings, destinations, load states, and stack neighbors",
+        "grade findings as blocking or watch and return a deterministic review document"
+      ],
+      "success": "every finding names a car and a track with reviewable evidence, and repeated runs over one state agree",
+      "failure": "the review has no yard-content failure modes; storage errors propagate unchanged",
+      "verification": "workflow check drives no-hazard, compliant, unrated, and mixed yard states and verifies stable findings",
+      "module_ids": ["entry", "service", "domain", "report"]
     }
   ]
 }

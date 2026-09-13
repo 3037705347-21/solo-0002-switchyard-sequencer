@@ -28,6 +28,7 @@ PYTHONPATH=src python3 checks/wf_intake_classify.py
 PYTHONPATH=src python3 checks/wf_outbound_sequence.py
 PYTHONPATH=src python3 checks/wf_pull_depart.py
 PYTHONPATH=src python3 checks/wf_close_shift.py
+PYTHONPATH=src python3 checks/wf_hazard_review.py
 ```
 
 Each check starts an isolated server on a free port with a temporary data
@@ -67,6 +68,7 @@ POST /api/pull-runs/RUN-01/advance
 POST /api/outbound-trains/OB-01/depart
 POST /api/shifts/SHIFT-01/close
 GET  /api/yard
+GET  /api/hazard-review
 ```
 
 Request and response examples are embedded in the project specification and in
