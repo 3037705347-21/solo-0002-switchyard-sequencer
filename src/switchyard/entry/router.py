@@ -45,6 +45,9 @@ class Router:
             Route("POST", r"/api/shifts/(?P<code>[^/]+)/close", self._close_shift),
             Route("POST", r"/api/intake-trains", self._create_intake),
             Route("POST", r"/api/intake-trains/(?P<code>[^/]+)/classify", self._classify),
+            Route("POST", r"/api/intake-trains/(?P<code>[^/]+)/correct", self._correct_intake),
+            Route("GET", r"/api/intake-trains/(?P<code>[^/]+)/manifest", self._intake_manifest),
+            Route("GET", r"/api/intake-trains/(?P<code>[^/]+)/manifest-versions", self._intake_manifest_versions),
             Route("POST", r"/api/outbound-trains", self._create_outbound),
             Route("POST", r"/api/outbound-trains/(?P<code>[^/]+)/sequencer", self._sequence),
             Route("POST", r"/api/outbound-trains/(?P<code>[^/]+)/depart", self._depart),
@@ -80,6 +83,15 @@ class Router:
 
     def _classify(self, body: Any, code: str) -> dict[str, Any]:
         return intake_service.classify_intake_command(self.app, code)
+
+    def _correct_intake(self, body: Any, code: str) -> dict[str, Any]:
+        return intake_service.correct_intake_manifest(self.app, code, body)
+
+    def _intake_manifest(self, body: Any, code: str) -> dict[str, Any]:
+        return query_service.intake_manifest_view(self.app, code)
+
+    def _intake_manifest_versions(self, body: Any, code: str) -> dict[str, Any]:
+        return query_service.intake_manifest_versions(self.app, code)
 
     def _create_outbound(self, body: Any) -> dict[str, Any]:
         return outbound_service.create_outbound(self.app, body)

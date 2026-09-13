@@ -6,6 +6,7 @@ from typing import Any
 
 from ..domain.car import FreightCar
 from ..domain.intake import IntakeTrain
+from ..domain.manifest import ManifestVersion
 from ..domain.outbound import OutboundTrain
 from ..domain.pull import PullRun, YardEvent
 from ..domain.shift import YardShift
@@ -21,6 +22,9 @@ def encode_workspace(workspace: Any) -> dict[str, Any]:
         "buffer_bays": [bay.to_dict() for bay in workspace.buffer_bays.values()],
         "cars": [car.to_dict() for car in workspace.cars.values()],
         "intakes": [train.to_dict() for train in workspace.intakes.values()],
+        "manifest_versions": [
+            record.to_dict() for records in workspace.manifest_versions.values() for record in records
+        ],
         "outbounds": [train.to_dict() for train in workspace.outbounds.values()],
         "pull_runs": [run.to_dict() for run in workspace.runs.values()],
         "shifts": [shift.to_dict() for shift in workspace.shifts.values()],
@@ -36,6 +40,10 @@ def decode_workspace(raw: dict[str, Any]) -> Any:
     bays = {str(item["code"]): BufferBay.from_dict(item) for item in raw.get("buffer_bays", [])}
     cars = {str(item["code"]): FreightCar.from_dict(item) for item in raw.get("cars", [])}
     intakes = {str(item["code"]): IntakeTrain.from_dict(item) for item in raw.get("intakes", [])}
+    manifest_versions: dict[str, list[ManifestVersion]] = {}
+    for item in raw.get("manifest_versions", []):
+        record = ManifestVersion.from_dict(dict(item))
+        manifest_versions.setdefault(record.intake_code, []).append(record)
     outbounds = {str(item["code"]): OutboundTrain.from_dict(item) for item in raw.get("outbounds", [])}
     runs = {str(item["code"]): PullRun.from_dict(item) for item in raw.get("pull_runs", [])}
     shifts = {str(item["code"]): YardShift.from_dict(item) for item in raw.get("shifts", [])}
@@ -45,6 +53,7 @@ def decode_workspace(raw: dict[str, Any]) -> Any:
         buffer_bays=bays,
         cars=cars,
         intakes=intakes,
+        manifest_versions=manifest_versions,
         outbounds=outbounds,
         runs=runs,
         shifts=shifts,

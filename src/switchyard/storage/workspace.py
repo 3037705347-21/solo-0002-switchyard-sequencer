@@ -22,6 +22,7 @@ class YardWorkspace:
     buffer_bays: dict[str, BufferBay] = field(default_factory=dict)
     cars: dict[str, Any] = field(default_factory=dict)
     intakes: dict[str, Any] = field(default_factory=dict)
+    manifest_versions: dict[str, list[Any]] = field(default_factory=dict)
     outbounds: dict[str, Any] = field(default_factory=dict)
     runs: dict[str, Any] = field(default_factory=dict)
     shifts: dict[str, Any] = field(default_factory=dict)

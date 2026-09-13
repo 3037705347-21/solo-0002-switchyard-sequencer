@@ -25,6 +25,7 @@ workflow checks exercise the real HTTP API:
 
 ```bash
 PYTHONPATH=src python3 checks/wf_intake_classify.py
+PYTHONPATH=src python3 checks/wf_manifest_correction.py
 PYTHONPATH=src python3 checks/wf_outbound_sequence.py
 PYTHONPATH=src python3 checks/wf_pull_depart.py
 PYTHONPATH=src python3 checks/wf_close_shift.py
@@ -60,6 +61,8 @@ replace, so interrupted writes do not leave partial state.
 ```text
 POST /api/shifts
 POST /api/intake-trains
+POST /api/intake-trains/INT-01/correct
+GET  /api/intake-trains/INT-01/manifest-versions
 POST /api/intake-trains/INT-01/classify
 POST /api/outbound-trains
 POST /api/outbound-trains/OB-01/sequencer
@@ -68,6 +71,13 @@ POST /api/outbound-trains/OB-01/depart
 POST /api/shifts/SHIFT-01/close
 GET  /api/yard
 ```
+
+A correction submits the full replacement manifest together with an `operator`
+and a `reason`. Each accepted correction stores a new manifest version with the
+added, removed, and updated cars; cars already classified or referenced by an
+outbound plan are rejected with a conflict list, while unused cars are
+replaced safely. History stays available through the manifest-versions
+endpoint, and classification always reads the latest version.
 
 Request and response examples are embedded in the project specification and in
 the workflow checks.

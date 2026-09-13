@@ -92,14 +92,7 @@ def parse_car_input(raw: dict[str, Any]) -> CarInput:
     )
 
 
-def build_intake_payload(raw: Any) -> tuple[IntakeTrain, list[CarInput]]:
-    body = require_object(raw, "payload")
-    code = require_text(body.get("code"), "code").upper()
-    if not is_entity_code(code, "INT"):
-        raise ValidationError("invalid intake code", **{"code": ["expected prefix INT-"]})
-    route = require_text(body.get("route"), "route", 30).upper()
-    arrival = normalize_iso(require_text(body.get("arrival_at"), "arrival_at", 40))
-    cars_raw = body.get("cars")
+def parse_car_list(cars_raw: Any) -> list[CarInput]:
     if not isinstance(cars_raw, list) or not cars_raw:
         raise ValidationError("at least one car is required", **{"cars": ["must not be empty"]})
     if len(cars_raw) > MAX_TRAIN_CONSIST:
@@ -122,6 +115,17 @@ def build_intake_payload(raw: Any) -> tuple[IntakeTrain, list[CarInput]]:
             )
         seen.add(car_input.code)
         inputs.append(car_input)
+    return inputs
+
+
+def build_intake_payload(raw: Any) -> tuple[IntakeTrain, list[CarInput]]:
+    body = require_object(raw, "payload")
+    code = require_text(body.get("code"), "code").upper()
+    if not is_entity_code(code, "INT"):
+        raise ValidationError("invalid intake code", **{"code": ["expected prefix INT-"]})
+    route = require_text(body.get("route"), "route", 30).upper()
+    arrival = normalize_iso(require_text(body.get("arrival_at"), "arrival_at", 40))
+    inputs = parse_car_list(body.get("cars"))
     train = IntakeTrain(
         code=code,
         route=route,
@@ -129,6 +133,14 @@ def build_intake_payload(raw: Any) -> tuple[IntakeTrain, list[CarInput]]:
         consist=[item.code for item in inputs],
     )
     return train, inputs
+
+
+def build_correction_payload(raw: Any) -> tuple[str, str, list[CarInput]]:
+    body = require_object(raw, "payload")
+    operator = require_text(body.get("operator"), "operator", 30)
+    reason = require_text(body.get("reason"), "reason", 200)
+    inputs = parse_car_list(body.get("cars"))
+    return operator, reason, inputs
 
 
 def build_outbound_payload(raw: Any) -> tuple[str, str, list[str]]:
@@ -191,11 +203,13 @@ def parse_transfer_code(raw: Any) -> str:
 
 
 __all__ = [
+    "build_correction_payload",
     "build_intake_payload",
     "build_outbound_payload",
     "build_shift_payload",
     "parse_advance_steps",
     "parse_car_input",
+    "parse_car_list",
     "parse_transfer_code",
     "require_integer",
     "require_object",

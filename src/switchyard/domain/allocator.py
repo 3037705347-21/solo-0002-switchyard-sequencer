@@ -52,7 +52,7 @@ def classify_intake(
             unplaced.append(code)
             continue
         if car.state != CarState.RECEIVED:
-            unplaced.append(code)
+            # Already placed by an earlier classification pass of this train.
             continue
         ranked = _ranked_candidates(car, cars, tracks)
         target = ranked[0] if ranked else None

@@ -32,4 +32,31 @@ def shift_view(app: YardApplication, shift_code: str) -> dict[str, Any]:
     return {"shift": shift.to_dict(), "events": events[-50:]}
 
 
-__all__ = ["shift_view", "yard_view"]
+def intake_manifest_view(app: YardApplication, intake_code: str) -> dict[str, Any]:
+    workspace = app.load()
+    train = workspace.intakes.get(intake_code)
+    if train is None:
+        raise NotFoundError("intake train", intake_code)
+    versions = workspace.manifest_versions.get(intake_code, [])
+    current = versions[-1] if versions else None
+    return {
+        "intake": train.to_dict(),
+        "manifest_version": current.to_dict() if current is not None else None,
+        "cars": [workspace.cars[code].to_dict() for code in train.consist if code in workspace.cars],
+    }
+
+
+def intake_manifest_versions(app: YardApplication, intake_code: str) -> dict[str, Any]:
+    workspace = app.load()
+    train = workspace.intakes.get(intake_code)
+    if train is None:
+        raise NotFoundError("intake train", intake_code)
+    versions = workspace.manifest_versions.get(intake_code, [])
+    return {
+        "intake_code": intake_code,
+        "current_version": train.manifest_version,
+        "versions": [record.to_dict() for record in versions],
+    }
+
+
+__all__ = ["intake_manifest_versions", "intake_manifest_view", "shift_view", "yard_view"]

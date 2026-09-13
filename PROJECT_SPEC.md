@@ -30,6 +30,8 @@ state as JSON files under a configurable data directory.
   car is pulled from deeper in a track stack.
 - `IntakeTrain`: an inbound train with a consist of newly received cars and an
   open, partial, or classified state.
+- `ManifestVersion`: an immutable snapshot of one intake manifest revision with
+  the operator, the reason, and the added, removed, and updated car changes.
 - `OutboundTrain`: a train destined for a route code with a planned car
   sequence and an assembled sequence.
 - `PullRun`: a stateful sequence of buffer, pull, and return actions derived
@@ -50,6 +52,18 @@ service validates car codes, dimensions, hazard classes, destination routes,
 and duplicate codes, then applies destination affinity, hazard rating, and
 capacity rules. A fully classified train is persisted and every placed car
 becomes available for outbound planning.
+
+A manifest that was recorded with mistakes can be corrected instead of
+re-created: `POST /api/intake-trains/{code}/correct` replaces the consist with
+a new manifest and records a `ManifestVersion` holding the diff, the operator,
+and the reason. The corrected manifest is validated again for car code
+uniqueness, dimensions, hazard classes, and destination routes. Cars that are
+already classified or referenced by an outbound plan are locked; a correction
+that touches them is rejected with a conflict list naming each blocking car
+and outbound train. Unused cars are replaced safely, removed cars disappear
+from the yard balance, and older versions stay queryable through
+`GET /api/intake-trains/{code}/manifest-versions`. Classification and closure
+always read the latest manifest version.
 
 ### 2. Plan an outbound pull sequence
 
@@ -127,6 +141,12 @@ workspace snapshot and never mutate it.
 - `POST /api/shifts`: open a shift.
 - `POST /api/intake-trains`: create an inbound train.
 - `POST /api/intake-trains/{code}/classify`: place cars on standing tracks.
+- `POST /api/intake-trains/{code}/correct`: record a versioned manifest
+  correction with operator and reason.
+- `GET /api/intake-trains/{code}/manifest`: return the current manifest
+  version with its cars.
+- `GET /api/intake-trains/{code}/manifest-versions`: list all retained
+  manifest versions.
 - `POST /api/outbound-trains`: create an outbound train.
 - `POST /api/outbound-trains/{code}/sequencer`: create a pull run.
 - `POST /api/pull-runs/{code}/advance`: execute the next pull actions.
