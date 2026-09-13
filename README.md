@@ -28,6 +28,7 @@ PYTHONPATH=src python3 checks/wf_intake_classify.py
 PYTHONPATH=src python3 checks/wf_outbound_sequence.py
 PYTHONPATH=src python3 checks/wf_pull_depart.py
 PYTHONPATH=src python3 checks/wf_close_shift.py
+PYTHONPATH=src python3 checks/wf_car_journey.py
 ```
 
 Each check starts an isolated server on a free port with a temporary data
@@ -54,6 +55,27 @@ replace, so interrupted writes do not leave partial state.
 - `SWITCHYARD_PORT`: default service port, used when `--port` is absent.
 - `SWITCHYARD_DATA_DIR`: default data directory, used when `--data-dir` is
   absent.
+
+## Car journey profiles
+
+`GET /api/car-journeys/{carCode}` rebuilds a single car's timeline from the
+persisted data directory. The profile aggregates, per car:
+
+- `RECEIVED` (intake arrival), `CLASSIFIED` (track spotting), `RESERVED`
+  (pull plan), `BUFFERED` / `RETURNED` (transfer-bay moves), `ASSEMBLED`
+  (pulled onto the outbound consist), and `DEPARTED` entries with timestamps,
+  locations, source locations, and the linked intake / pull run / outbound
+  train and shift.
+- `flags` marks places where the trajectory disagrees with the car's current
+  state or location (or with stack/consist membership), and `evidence_gaps`
+  reports missing journal evidence for older data. Surviving entity fragments
+  are kept with `evidence: "entity"`; missing fragments are never fabricated.
+- Only car-relevant structured journal events are used; shift, closure, and
+  yard-view messages are ignored, and event message text is never parsed.
+- Queries are read-only and deterministic: repeated calls return the same
+  document and never change cars or events.
+
+`GET /api/car-journeys` returns a compact sorted index of all car journeys.
 
 ## Example API sequence
 
