@@ -28,10 +28,36 @@ PYTHONPATH=src python3 checks/wf_intake_classify.py
 PYTHONPATH=src python3 checks/wf_outbound_sequence.py
 PYTHONPATH=src python3 checks/wf_pull_depart.py
 PYTHONPATH=src python3 checks/wf_close_shift.py
+PYTHONPATH=src python3 checks/wf_shift_statistics.py
 ```
 
 Each check starts an isolated server on a free port with a temporary data
 directory and stops the server before exiting.
+
+## Per-shift operation statistics
+
+Beyond the instant yard counters, each shift carries operation statistics that
+answer backlog, repeat-work, turnover, and dwell questions:
+
+- average and maximum duration for each stage — intake handling
+  (receive → classify), pull planning delay (planned → started), pull execution
+  (started → completed), car arrival → assembly, and car arrival → departure;
+- buffer, return, and pull move counts, with moves from a failed attempt
+  reported separately because they are rolled back;
+- failed runs, replanned retry runs, and how many outbounds needed a retry;
+- per-track placements, releases, turnovers, and cars still on the track;
+- destination distribution (received / classified / assembled / departed);
+- per-intake, per-run, per-outbound, and per-car detail rows plus an `issues`
+  list that records missing or unparseable timestamps instead of treating them
+  as zero.
+
+All statistics are recomputed solely from the shift-filtered event trail, so
+`GET /api/shifts/{code}/statistics/recompute` rebuilds them straight from the
+raw `events.jsonl` journal. Open shifts recompute live on every read; when a
+shift closes the numbers are frozen inside the closure snapshot and later reads
+serve that frozen document. Mid-run failures are persisted (`PULL_RUN_FAILED`),
+the partially applied moves are rolled back, and
+`POST /api/outbound-trains/{code}/retry` plans a fresh attempt run.
 
 ## Directory structure
 
@@ -64,7 +90,10 @@ POST /api/intake-trains/INT-01/classify
 POST /api/outbound-trains
 POST /api/outbound-trains/OB-01/sequencer
 POST /api/pull-runs/RUN-01/advance
+POST /api/outbound-trains/OB-01/retry        # after a failed run attempt
 POST /api/outbound-trains/OB-01/depart
+GET  /api/shifts/SHIFT-01/statistics         # live while open, frozen once closed
+GET  /api/shifts/SHIFT-01/statistics/recompute
 POST /api/shifts/SHIFT-01/close
 GET  /api/yard
 ```

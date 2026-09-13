@@ -70,8 +70,12 @@ The crew lead advances the pull run one action at a time. Each advance verifies
 the current track top, the buffer state, and the car reservation before
 changing locations. Buffer cars are parked and later returned, planned cars are
 appended to the outbound assembled consist, and the run completes only when the
-assembled sequence matches the planned sequence. The dispatcher can then mark
-the train departed and move its cars into the departed state.
+assembled sequence matches the planned sequence. If an action fails midway,
+the already-applied actions of that advance are rolled back, the run is
+persisted as `failed` with a `PULL_RUN_FAILED` event (no partial work and no
+zero-duration completion are recorded), and the dispatcher can plan a fresh
+attempt run through the retry command. The dispatcher can then mark the train
+departed and move its cars into the departed state.
 
 ### 4. Close a shift with a yard balance
 
@@ -84,6 +88,24 @@ standing track is in maintenance with cars present. When the checks pass, it
 stores a `ClosureSnapshot`, records the closure event, and exposes the yard
 view for verification.
 
+### 5. Review per-shift operation statistics
+
+Entry: `GET /api/shifts/{code}/statistics`,
+`GET /api/shifts/{code}/statistics/recompute`
+
+The shift lead reviews per-shift statistics rebuilt from the event trail:
+average and maximum intake handling, pull planning delay, pull execution, and
+arrival-to-assembly / arrival-to-departure durations; buffer, return, and pull
+move counts (with rolled-back moves from failed attempts reported separately);
+failed runs, retries, and outbounds that needed more than one attempt; track
+placements, releases, and turnovers; destination distribution; and per-intake,
+per-run, per-outbound, and per-car detail rows. Statistics for an open shift
+are recomputed live on every read; when the shift closes the same document is
+frozen inside the closure snapshot. Missing or unparseable timestamps keep a
+timing value empty and add an entry to `issues` rather than counting as zero,
+in-progress work is excluded from averages and maxima, and events are always
+filtered by shift code so closed shifts never bleed into the current shift.
+
 ## State and rules
 
 - Shift state transitions from `open` to `closed` only through an approved
@@ -92,7 +114,8 @@ view for verification.
   is allowed only before classification.
 - Outbound state moves from `draft` to `planned` when a pull run is created,
   then to `ready` when assembly completes, then to `departed`.
-- Pull runs move from `queued` to `running`, then `completed` or `failed`.
+- Pull runs move from `queued` to `running`, then `completed` or `failed`; a
+  failed run is terminal and a retry creates a fresh numbered attempt run.
 - Car state moves from `received` to `standing`, `reserved`, `assembled`, and
   `departed`.
 - Destination-sorting tracks accept only cars whose destination matches the
@@ -115,7 +138,7 @@ view for verification.
   pull sequencing, and domain errors.
 - `storage`: workspace model, atomic persistence, seed tracks, and event
   journaling.
-- `report`: yard metrics, closure validation, and deterministic summaries.
+- `report`: yard metrics, closure validation, deterministic summaries, and per-shift operation statistics rebuilt from events.
 
 Entry routes call service commands. Service commands load the persisted
 workspace, apply domain operations, and commit only after the operation
@@ -130,7 +153,10 @@ workspace snapshot and never mutate it.
 - `POST /api/outbound-trains`: create an outbound train.
 - `POST /api/outbound-trains/{code}/sequencer`: create a pull run.
 - `POST /api/pull-runs/{code}/advance`: execute the next pull actions.
+- `POST /api/outbound-trains/{code}/retry`: plan a fresh run after a failure.
 - `POST /api/outbound-trains/{code}/depart`: mark an assembled train departed.
+- `GET /api/shifts/{code}/statistics`: live or frozen shift operation statistics.
+- `GET /api/shifts/{code}/statistics/recompute`: rebuild statistics from the journal.
 - `POST /api/shifts/{code}/close`: create a closure snapshot.
 - `GET /api/yard`: return the full yard view.
 - `GET /api/shifts/{code}`: return shift details and recent events.

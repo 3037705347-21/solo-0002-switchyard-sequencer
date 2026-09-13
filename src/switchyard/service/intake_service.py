@@ -40,7 +40,17 @@ def create_intake(app: YardApplication, payload: Any) -> dict[str, Any]:
         shift_code,
         EventKind.TRAIN_RECEIVED,
         f"intake {train.code} received {len(cars)} cars",
-        {"route": train.route, "car_count": len(cars), "arrival_at": train.arrival_at},
+        {
+            "intake_code": train.code,
+            "route": train.route,
+            "car_count": len(cars),
+            "arrival_at": train.arrival_at,
+            "car_codes": [car.code for car in cars],
+            "cars": [
+                {"code": car.code, "kind": str(car.kind), "destination": car.destination, "danger_class": car.danger_class}
+                for car in cars
+            ],
+        },
     )
     app.commit(workspace, event)
     return {
@@ -72,8 +82,11 @@ def classify_intake_command(app: YardApplication, intake_code: str) -> dict[str,
         EventKind.TRAIN_CLASSIFIED,
         message,
         {
+            "intake_code": intake_code,
             "spotted": len(spots),
+            "placed_count": len(spots),
             "unplaced": list(train.unplaced),
+            "unplaced_count": len(train.unplaced),
             "spots": [item.to_dict() for item in spots],
         },
     )

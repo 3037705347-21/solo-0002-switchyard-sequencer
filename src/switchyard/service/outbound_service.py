@@ -75,7 +75,12 @@ def create_outbound(app: YardApplication, payload: Any) -> dict[str, Any]:
         shift_code,
         EventKind.TRAIN_CREATED,
         f"outbound {code} drafted for {destination}",
-        {"destination": destination, "planned_count": len(car_codes)},
+        {
+            "outbound_code": code,
+            "destination": destination,
+            "planned_count": len(car_codes),
+            "car_codes": list(car_codes),
+        },
     )
     app.commit(workspace, event)
     return train.to_dict()
@@ -111,7 +116,13 @@ def sequence_outbound(app: YardApplication, outbound_code: str, payload: Any) ->
         shift_code,
         EventKind.PULL_PLANNED,
         f"pull run {run.code} planned for {outbound.code}",
-        {"steps": len(run.steps), "transfer_code": transfer_code},
+        {
+            "run_code": run.code,
+            "outbound_code": outbound.code,
+            "attempt": run.attempt,
+            "steps": len(run.steps),
+            "transfer_code": transfer_code,
+        },
     )
     app.commit(workspace, event)
     return {"pull_run": run.to_dict(), "outbound": outbound.to_dict()}

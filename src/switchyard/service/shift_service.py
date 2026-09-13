@@ -8,6 +8,7 @@ from ..domain.enums import EventKind, ShiftState
 from ..domain.errors import ConflictError, NotFoundError, ResourceBusyError
 from ..domain.shift import YardShift
 from ..domain.validators import build_shift_payload
+from ..report.summary import live_or_frozen_statistics
 from .context import YardApplication
 
 
@@ -40,7 +41,11 @@ def get_shift(app: YardApplication, code: str) -> dict[str, Any]:
     if shift is None:
         raise NotFoundError("shift", code)
     events = [event.to_dict() for event in workspace.events if event.shift_code == code]
-    return {"shift": shift.to_dict(), "events": events[-40:]}
+    return {
+        "shift": shift.to_dict(),
+        "events": events[-40:],
+        "shift_statistics": live_or_frozen_statistics(workspace, code),
+    }
 
 
 __all__ = ["get_shift", "open_shift"]

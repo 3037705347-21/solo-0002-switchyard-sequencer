@@ -22,6 +22,10 @@
     {
       "workflow_id": "close-shift-balance",
       "command": "PYTHONPATH=src python3 checks/wf_close_shift.py"
+    },
+    {
+      "workflow_id": "shift-statistics",
+      "command": "PYTHONPATH=src python3 checks/wf_shift_statistics.py"
     }
   ]
 }

@@ -35,7 +35,7 @@ def transition_car(car: FreightCar, target: CarState, reason: str | None = None)
             CarState.STANDING.value,
             CarState.REMOVED.value,
         },
-        CarState.ASSEMBLED.value: {CarState.DEPARTED.value, CarState.REMOVED.value},
+        CarState.ASSEMBLED.value: {CarState.DEPARTED.value, CarState.RESERVED.value, CarState.REMOVED.value},
         CarState.DEPARTED.value: {CarState.REMOVED.value},
         CarState.REMOVED.value: set(),
     }

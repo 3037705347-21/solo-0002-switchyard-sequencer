@@ -37,6 +37,7 @@ def plan_pull_run(
     tracks: dict[str, StandingTrack],
     transfer_bays: dict[str, BufferBay],
     transfer_code: str,
+    attempt: int = 1,
 ) -> PullRun:
     if outbound.state != OutboundState.DRAFT:
         raise StateTransitionError("outbound train", str(outbound.state), "PLANNED", "already has a plan")
@@ -113,7 +114,13 @@ def plan_pull_run(
                 track_code=transfer.code,
             )
         )
-    run = PullRun(code=run_code, outbound_code=outbound.code, transfer_code=transfer.code, steps=steps)
+    run = PullRun(
+        code=run_code,
+        outbound_code=outbound.code,
+        transfer_code=transfer.code,
+        steps=steps,
+        attempt=attempt,
+    )
     for code in planned:
         transition_car(cars[code], CarState.RESERVED)
     transition_outbound(outbound, OutboundState.PLANNED)

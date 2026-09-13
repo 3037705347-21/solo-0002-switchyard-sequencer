@@ -42,11 +42,14 @@ class Router:
             Route("GET", r"/api/yard", self._yard),
             Route("POST", r"/api/shifts", self._open_shift),
             Route("GET", r"/api/shifts/(?P<code>[^/]+)", self._shift_view),
+            Route("GET", r"/api/shifts/(?P<code>[^/]+)/statistics", self._shift_statistics),
+            Route("GET", r"/api/shifts/(?P<code>[^/]+)/statistics/recompute", self._recompute_statistics),
             Route("POST", r"/api/shifts/(?P<code>[^/]+)/close", self._close_shift),
             Route("POST", r"/api/intake-trains", self._create_intake),
             Route("POST", r"/api/intake-trains/(?P<code>[^/]+)/classify", self._classify),
             Route("POST", r"/api/outbound-trains", self._create_outbound),
             Route("POST", r"/api/outbound-trains/(?P<code>[^/]+)/sequencer", self._sequence),
+            Route("POST", r"/api/outbound-trains/(?P<code>[^/]+)/retry", self._retry_run),
             Route("POST", r"/api/outbound-trains/(?P<code>[^/]+)/depart", self._depart),
             Route("POST", r"/api/pull-runs/(?P<code>[^/]+)/advance", self._advance),
         ]
@@ -72,6 +75,12 @@ class Router:
     def _shift_view(self, body: Any, code: str) -> dict[str, Any]:
         return shift_service.get_shift(self.app, code)
 
+    def _shift_statistics(self, body: Any, code: str) -> dict[str, Any]:
+        return query_service.shift_statistics_view(self.app, code)
+
+    def _recompute_statistics(self, body: Any, code: str) -> dict[str, Any]:
+        return query_service.recompute_shift_statistics(self.app, code)
+
     def _close_shift(self, body: Any, code: str) -> dict[str, Any]:
         return closure_service.close_shift(self.app, code)
 
@@ -86,6 +95,9 @@ class Router:
 
     def _sequence(self, body: Any, code: str) -> dict[str, Any]:
         return outbound_service.sequence_outbound(self.app, code, body)
+
+    def _retry_run(self, body: Any, code: str) -> dict[str, Any]:
+        return run_service.retry_run(self.app, code, body)
 
     def _depart(self, body: Any, code: str) -> dict[str, Any]:
         return run_service.depart_outbound(self.app, code)

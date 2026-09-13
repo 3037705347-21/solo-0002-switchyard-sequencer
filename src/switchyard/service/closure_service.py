@@ -31,8 +31,6 @@ def close_shift(app: YardApplication, shift_code: str) -> dict[str, Any]:
         app.commit(workspace, event)
         raise ResourceBusyError("shift closure is blocked", blockers=blockers)
     snapshot_code = f"SNAP-{shift_code}"
-    document = snapshot_document(workspace, shift_code, snapshot_code)
-    workspace.closure_snapshots.append(document)
     closed_at = now_iso()
     transition_shift(shift, ShiftState.CLOSED)
     shift.closed_at = closed_at
@@ -43,7 +41,12 @@ def close_shift(app: YardApplication, shift_code: str) -> dict[str, Any]:
         f"shift {shift_code} closed",
         {"snapshot_code": snapshot_code, "closed_at": closed_at},
     )
-    app.commit(workspace, event)
+    # Journal the closure event before freezing the snapshot so a stats
+    # rebuild straight from the raw journal reproduces the frozen document.
+    app.repository.journal_event(workspace, event)
+    document = snapshot_document(workspace, shift_code, snapshot_code)
+    workspace.closure_snapshots.append(document)
+    app.commit(workspace, None)
     return {
         "shift": shift.to_dict(),
         "snapshot": document,
