@@ -59,10 +59,29 @@ def setup_yard(api: ApiClient) -> None:
         },
     )
     api.expect_ok("POST", "/api/intake-trains/INT-42/classify", {})
+    api.expect_ok(
+        "POST",
+        "/api/intake-trains",
+        {
+            "code": "INT-43",
+            "route": "RAIL-43",
+            "arrival_at": "2026-09-10T10:00:00Z",
+            "cars": [
+                {"code": "C-E7-41", "kind": "BOX", "destination": "E7", "loaded": False, "length_m": 18, "danger_class": "NONE"},
+                {"code": "C-E7-42", "kind": "TANK", "destination": "E7", "loaded": False, "length_m": 18, "danger_class": "NONE"},
+                {"code": "C-E7-BLK", "kind": "BOX", "destination": "E7", "loaded": False, "length_m": 18, "danger_class": "NONE"},
+            ],
+        },
+    )
+    api.expect_ok("POST", "/api/intake-trains/INT-43/classify", {})
 
 
-def _plan(api: ApiClient, code: str, cars: list[str]) -> str:
-    api.expect_ok("POST", "/api/outbound-trains", {"code": code, "destination": "N4", "car_codes": cars})
+def _plan(api: ApiClient, code: str, cars: list[str], destination: str = "N4") -> str:
+    api.expect_ok(
+        "POST",
+        "/api/outbound-trains",
+        {"code": code, "destination": destination, "car_codes": cars},
+    )
     sequenced = api.expect_ok(
         "POST",
         f"/api/outbound-trains/{code}/sequencer",
@@ -166,7 +185,7 @@ def check_buffered_execution(api: ApiClient, v1: dict[str, object]) -> dict[str,
 def check_assembly_complete(api: ApiClient, v2: dict[str, object]) -> dict[str, object]:
     api.expect_ok("POST", "/api/pull-runs/RUN-OB-41/advance", {"steps": 10})
     yard_before = api.expect_ok("GET", "/api/yard")
-    assert yard_before["metrics"]["car_state_counts"]["standing"] == 6
+    assert yard_before["metrics"]["car_state_counts"]["standing"] == 9
 
     manifest = _publish(api, "OB-41", 3)
     assert manifest["planned_sequence"] == manifest["assembled_sequence"] == ["C-N4-42", "C-N4-41"]
@@ -189,7 +208,7 @@ def check_assembly_complete(api: ApiClient, v2: dict[str, object]) -> dict[str, 
 
     # The yard-state-only manifest publish must not have moved any car.
     yard = api.expect_ok("GET", "/api/yard")
-    assert yard["metrics"]["car_state_counts"]["standing"] == 6
+    assert yard["metrics"]["car_state_counts"]["standing"] == 9
     assert yard["metrics"]["car_state_counts"]["assembled"] == 2
 
     # Previous versions remain retrievable and byte-stable.
@@ -288,12 +307,110 @@ def check_conflict_and_correction(api: ApiClient) -> None:
     assert manifest_events[-1]["payload"]["manifest_code"] == "MAN-OB-42-V4"
 
 
+def check_blocker_only_move(api: ApiClient) -> None:
+    """Regression: a BUFFER step moves only a non-planned blocker car.
+
+    E7-A stacks C-E7-41, C-E7-BLK, C-E7-42. The plan pulls C-E7-42 first, so
+    the very first step buffers C-E7-BLK without touching any planned car or
+    the assembled sequence. A frozen V1 must therefore no longer verify as
+    matching the yard even though every planned entry looks unchanged.
+    """
+
+    run_code = _plan(api, "OB-43", ["C-E7-42", "C-E7-41"], destination="E7")
+    v1 = _publish(api, "OB-43", 1)
+    assert v1["yard_context"]["buffered_cars"] == []
+    assert v1["references"]["pull_run_state"] == "QUEUED"
+    assert v1["references"]["pull_run_code"] == run_code
+
+    readiness0 = api.expect_ok("GET", "/api/outbound-trains/OB-43/readiness")
+    assert len(readiness0["pending"]) == 2
+    assert readiness0["conflicts"] == []
+    assert readiness0["buffered_cars"] == []
+    assert readiness0["pull_run"]["state"] == "QUEUED"
+    assert readiness0["pull_run"]["current_step"] == 0
+
+    verify0 = api.expect_ok("GET", "/api/outbound-trains/OB-43/manifests/1/verify")["verification"]
+    assert verify0["digest_valid"] is True
+    assert verify0["matches_current_yard"] is True
+
+    # Advance a single step: only the blocker car is buffered; planned cars
+    # stay RESERVED on E7-A and the assembled consist is still empty.
+    api.expect_ok("POST", "/api/pull-runs/RUN-OB-43/advance", {"steps": 1})
+
+    readiness1 = api.expect_ok("GET", "/api/outbound-trains/OB-43/readiness")
+    assert len(readiness1["pending"]) == 2
+    assert readiness1["conflicts"] == []
+    assert readiness1["ready_to_depart"] is False
+    buffered = {(item["car_code"], item["bay_code"], item["planned_for_train"]) for item in readiness1["buffered_cars"]}
+    assert buffered == {("C-E7-BLK", "X1", False)}
+    assert readiness1["pull_run"]["state"] == "RUNNING"
+    assert readiness1["pull_run"]["current_step"] == 1
+    assert readiness1["pull_run"]["remaining_steps"] == readiness1["pull_run"]["total_steps"] - 1
+
+    # Core regression: the export verification must detect the buffer/run
+    # change instead of reporting the frozen plan as still yard-consistent.
+    export1 = api.expect_ok("GET", "/api/outbound-trains/OB-43/manifests/1/export")
+    verification = export1["verification"]
+    assert verification["digest_valid"] is True
+    assert verification["matches_current_yard"] is False
+    joined = " | ".join(verification["divergences"])
+    assert "C-E7-BLK newly buffered in X1" in joined
+    assert "RUNNING" in joined
+    assert "advanced from step 0 to 1" in joined
+    # Planned cars themselves have not moved yet.
+    assert not any("C-E7-42" in item or "C-E7-41" in item for item in verification["divergences"])
+    # The frozen document content is still byte-intact.
+    stored = _get_version(api, "OB-43", 1)
+    assert stored["content_digest"] == v1["content_digest"]
+    assert stored["yard_context"]["buffered_cars"] == []
+
+    # Publishing V2 at the blocker-only point freezes the live buffer; it must
+    # verify against the current yard right now.
+    v2 = _publish(api, "OB-43", 2)
+    buffered_v2 = {(item["car_code"], item["bay_code"]) for item in v2["yard_context"]["buffered_cars"]}
+    assert buffered_v2 == {("C-E7-BLK", "X1")}
+    verify2 = api.expect_ok("GET", "/api/outbound-trains/OB-43/manifests/2/verify")["verification"]
+    assert verify2["digest_valid"] is True
+    assert verify2["matches_current_yard"] is True
+
+    # Finish assembly: blockers return to the track and both planned cars come
+    # out in order. V1/V2 diverge; the completed V3 matches the yard, and the
+    # driver sees no pending or conflicting difference.
+    api.expect_ok("POST", "/api/pull-runs/RUN-OB-43/advance", {"steps": 10})
+    v3 = _publish(api, "OB-43", 3)
+    assert v3["planned_sequence"] == v3["assembled_sequence"] == ["C-E7-42", "C-E7-41"]
+    assert v3["discrepancy_summary"]["ready_to_depart"] is True
+    assert v3["yard_context"]["buffered_cars"] == []
+
+    export3 = api.expect_ok("GET", "/api/outbound-trains/OB-43/manifests/3/export")
+    assert export3["verification"]["digest_valid"] is True
+    assert export3["verification"]["matches_current_yard"] is True
+    assert export3["departure_readiness"]["ready_to_depart"] is True
+    assert export3["departure_readiness"]["buffered_cars"] == []
+
+    verify1_after = api.expect_ok("GET", "/api/outbound-trains/OB-43/manifests/1/verify")["verification"]
+    assert verify1_after["matches_current_yard"] is False
+    assert verify1_after["digest_valid"] is True
+    joined1 = " | ".join(verify1_after["divergences"])
+    assert "assembled sequence changed" in joined1
+    assert "QUEUED" in joined1 and "COMPLETED" in joined1
+
+    # V2 froze the blocker in the buffer, so its return is reported explicitly.
+    verify2_after = api.expect_ok("GET", "/api/outbound-trains/OB-43/manifests/2/verify")["verification"]
+    assert verify2_after["matches_current_yard"] is False
+    assert "C-E7-BLK left buffer X1" in " | ".join(verify2_after["divergences"])
+
+    listing = api.expect_ok("GET", "/api/outbound-trains/OB-43/manifests")
+    assert [item["version"] for item in listing["versions"]] == [1, 2, 3]
+
+
 def run(api: ApiClient) -> None:
     setup_yard(api)
     v1 = check_unexecuted_plan(api)
     v2 = check_buffered_execution(api, v1)
     check_assembly_complete(api, v2)
     check_conflict_and_correction(api)
+    check_blocker_only_move(api)
 
 
 if __name__ == "__main__":

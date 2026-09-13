@@ -319,6 +319,9 @@ def verify_manifest(document: dict[str, Any], workspace: Any) -> dict[str, Any]:
 
     outbound_code = str(document["outbound_code"])
     outbound = workspace.outbounds.get(outbound_code)
+    frozen_state = document.get("outbound_state")
+    references = dict(document.get("references") or {})
+    yard_context = dict(document.get("yard_context") or {})
     live = {
         "outbound_exists": outbound is not None,
         "planned_sequence": list(outbound.planned_car_codes) if outbound else None,
@@ -329,10 +332,39 @@ def verify_manifest(document: dict[str, Any], workspace: Any) -> dict[str, Any]:
     if outbound is None:
         divergences.append("outbound train no longer exists")
     else:
+        if frozen_state is not None and frozen_state != str(outbound.state):
+            divergences.append(
+                f"outbound state changed: {frozen_state} -> {outbound.state.value}"
+            )
         if list(document.get("planned_sequence", [])) != outbound.planned_car_codes:
             divergences.append("planned sequence changed")
         if list(document.get("assembled_sequence", [])) != outbound.assembled_car_codes:
             divergences.append("assembled sequence changed")
+
+        # Pull run progress. Early buffer-only moves do not touch the planned
+        # cars or the assembled sequence, so the frozen run step/state must be
+        # compared explicitly, otherwise a partially executed run still looks
+        # identical to the frozen plan.
+        run_code = references.get("pull_run_code")
+        frozen_step = yard_context.get("run_current_step")
+        run = workspace.runs.get(str(run_code)) if run_code else None
+        if run is None:
+            if run_code:
+                divergences.append(f"pull run {run_code} no longer exists")
+        else:
+            live["pull_run_code"] = run.code
+            live["pull_run_state"] = str(run.state)
+            live["pull_run_current_step"] = run.current_step
+            frozen_run_state = references.get("pull_run_state")
+            if frozen_run_state is not None and frozen_run_state != str(run.state):
+                divergences.append(
+                    f"pull run {run.code} state changed: {frozen_run_state} -> {run.state.value}"
+                )
+            if frozen_step is not None and int(frozen_step) != run.current_step:
+                divergences.append(
+                    f"pull run {run.code} advanced from step {frozen_step} to {run.current_step}"
+                )
+
         for entry in document.get("entries", []):
             code = entry.get("planned_car_code") or entry.get("assembled_car_code")
             car = workspace.cars.get(code) if code else None
@@ -345,6 +377,25 @@ def verify_manifest(document: dict[str, Any], workspace: Any) -> dict[str, Any]:
                 divergences.append(f"car {code} state changed: {frozen_car.get('state')} -> {car.state}")
             if frozen_car.get("location") != car.location:
                 divergences.append(f"car {code} location changed: {frozen_car.get('location')} -> {car.location}")
+
+        # Buffer bays. A BUFFER step only moves a non-planned blocker car, so
+        # this is the only signal available for early execution. Compare both
+        # the full frozen snapshot and per-car live locations.
+        frozen_bays: dict[str, set[str]] = {}
+        for item in yard_context.get("buffered_cars", []):
+            frozen_bays.setdefault(str(item.get("bay_code")), set()).add(str(item.get("car_code")))
+        live_bays = {code: set(bay.stack) for code, bay in workspace.buffer_bays.items()}
+        for bay_code in sorted(set(frozen_bays) | set(live_bays)):
+            before = frozen_bays.get(bay_code, set())
+            after = live_bays.get(bay_code, set())
+            for code in sorted(after - before):
+                car = workspace.cars.get(code)
+                location = car.location if car is not None else "?"
+                divergences.append(f"car {code} newly buffered in {bay_code} (now at {location})")
+            for code in sorted(before - after):
+                car = workspace.cars.get(code)
+                location = car.location if car is not None else "removed"
+                divergences.append(f"car {code} left buffer {bay_code} (now at {location})")
     return {
         "code": document.get("code"),
         "version": document.get("version"),
@@ -358,7 +409,13 @@ def verify_manifest(document: dict[str, Any], workspace: Any) -> dict[str, Any]:
 
 
 def departure_readiness(workspace: Any, outbound: Any) -> dict[str, Any]:
-    """Fresh plan-vs-actual read used while preparing to depart."""
+    """Fresh plan-vs-actual read used while preparing to depart.
+
+    Besides the per-slot pending/conflict classification, this surfaces the
+    live shunting picture (active pull run progress and every car currently
+    parked in a buffer bay) so the driver can see that an in-progress buffer
+    move is still an unexecuted plan rather than a conflict.
+    """
 
     buffered_codes = {code for bay in workspace.buffer_bays.values() for code in bay.stack}
     discrepancies = classify_discrepancies(
@@ -369,6 +426,17 @@ def departure_readiness(workspace: Any, outbound: Any) -> dict[str, Any]:
     )
     pending = [item for item in discrepancies if item["status"] == PENDING]
     conflicts = [item for item in discrepancies if item["status"] == CONFLICT]
+
+    run = _active_run(workspace, outbound)
+    buffered_cars = [
+        {
+            "car_code": code,
+            "bay_code": bay.code,
+            "planned_for_train": code in set(outbound.planned_car_codes),
+        }
+        for bay in workspace.buffer_bays.values()
+        for code in bay.stack
+    ]
     return {
         "outbound_code": outbound.code,
         "outbound_state": str(outbound.state),
@@ -377,6 +445,18 @@ def departure_readiness(workspace: Any, outbound: Any) -> dict[str, Any]:
         "pending": pending,
         "conflicts": conflicts,
         "ready_to_depart": not pending and not conflicts,
+        "buffered_cars": buffered_cars,
+        "pull_run": (
+            {
+                "code": run.code,
+                "state": str(run.state),
+                "current_step": run.current_step,
+                "total_steps": len(run.steps),
+                "remaining_steps": run.remaining(),
+            }
+            if run is not None
+            else None
+        ),
     }
 
 

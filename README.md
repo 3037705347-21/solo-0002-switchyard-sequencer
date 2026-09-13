@@ -34,9 +34,11 @@ PYTHONPATH=src python3 checks/wf_close_shift.py
 
 `wf_departure_manifest` publishes a manifest version after the plan is
 confirmed, then again mid-buffer, at assembly completion, and after a
-plan-vs-actual conflict is corrected. It asserts each version keeps its digest
-as the yard changes, that pending moves and conflicts are distinguished, and
-that every export verifies against the current yard.
+plan-vs-actual conflict is corrected. It also regresses the blocker-only case:
+advancing a single BUFFER step moves just a non-planned car, and the frozen
+version must already fail yard verification. Each version keeps its digest as
+the yard changes, pending moves and conflicts are distinguished, and every
+completed export verifies against the current yard.
 
 Each check starts an isolated server on a free port with a temporary data
 directory and stops the server before exiting.

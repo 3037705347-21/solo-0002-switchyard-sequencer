@@ -117,6 +117,18 @@ derives a fresh run. Published manifests keep pointing at the run codes frozen
 at publication time and are never rewritten; verification reports whether each
 old version still matches the current yard.
 
+Verification compares more than the planned and assembled sequences. It also
+checks the outbound and pull-run state, the pull-run current step, the state
+and location of every car captured in the entries, and the full contents of
+the buffer bays against the frozen snapshot. This is required because an early
+BUFFER step moves only a non-planned blocker car: the planned cars stay
+reserved and the assembled sequence is still empty, so without run-progress
+and buffer comparisons a partially executed plan would incorrectly verify as
+yard-consistent. The live readiness view likewise reports the active run
+progress and every car currently parked in a buffer bay (flagged whether it
+belongs to the train), so the driver can tell a still-unexecuted buffer move
+from a conflict.
+
 ### 4. Close a shift with a yard balance
 
 Entry: `POST /api/shifts/{code}/close`, `GET /api/yard`
