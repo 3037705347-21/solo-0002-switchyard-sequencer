@@ -74,6 +74,11 @@ class RunState(EnumValue):
     FAILED = "FAILED"
 
 
+class ReorderMode(EnumValue):
+    MOVES = "MOVES"
+    TARGET_ORDER = "TARGET_ORDER"
+
+
 class ShiftState(EnumValue):
     OPEN = "OPEN"
     CLOSED = "CLOSED"
@@ -83,6 +88,7 @@ class MoveVerb(EnumValue):
     BUFFER = "BUFFER"
     RETURN = "RETURN"
     PULL = "PULL"
+    EXTRACT = "EXTRACT"
 
 
 class EventKind(EnumValue):
@@ -94,6 +100,10 @@ class EventKind(EnumValue):
     PULL_RUN_STARTED = "PULL_RUN_STARTED"
     PULL_RUN_ADVANCED = "PULL_RUN_ADVANCED"
     PULL_RUN_COMPLETED = "PULL_RUN_COMPLETED"
+    REORDER_PLANNED = "REORDER_PLANNED"
+    REORDER_STARTED = "REORDER_STARTED"
+    REORDER_ADVANCED = "REORDER_ADVANCED"
+    REORDER_COMPLETED = "REORDER_COMPLETED"
     TRAIN_DEPARTED = "TRAIN_DEPARTED"
     SHIFT_CLOSED = "SHIFT_CLOSED"
     CLOSURE_BLOCKED = "CLOSURE_BLOCKED"
@@ -108,6 +118,7 @@ __all__ = [
     "IntakeState",
     "MoveVerb",
     "OutboundState",
+    "ReorderMode",
     "RunState",
     "ShiftState",
     "TrackPurpose",

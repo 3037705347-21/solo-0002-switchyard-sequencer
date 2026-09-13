@@ -11,6 +11,7 @@ from ..service import (
     intake_service,
     outbound_service,
     query_service,
+    reorder_service,
     run_service,
     shift_service,
 )
@@ -49,6 +50,9 @@ class Router:
             Route("POST", r"/api/outbound-trains/(?P<code>[^/]+)/sequencer", self._sequence),
             Route("POST", r"/api/outbound-trains/(?P<code>[^/]+)/depart", self._depart),
             Route("POST", r"/api/pull-runs/(?P<code>[^/]+)/advance", self._advance),
+            Route("POST", r"/api/reorder-orders", self._create_reorder),
+            Route("GET", r"/api/reorder-orders/(?P<code>[^/]+)", self._reorder_view),
+            Route("POST", r"/api/reorder-orders/(?P<code>[^/]+)/advance", self._advance_reorder),
         ]
 
     def dispatch(self, method: str, path: str, body: Any) -> tuple[int, dict[str, Any]]:
@@ -92,6 +96,15 @@ class Router:
 
     def _advance(self, body: Any, code: str) -> dict[str, Any]:
         return run_service.advance_run(self.app, code, body)
+
+    def _create_reorder(self, body: Any) -> dict[str, Any]:
+        return reorder_service.create_reorder_order(self.app, body)
+
+    def _reorder_view(self, body: Any, code: str) -> dict[str, Any]:
+        return reorder_service.get_reorder_order(self.app, code)
+
+    def _advance_reorder(self, body: Any, code: str) -> dict[str, Any]:
+        return reorder_service.advance_reorder(self.app, code, body)
 
 
 __all__ = ["Route", "Router"]

@@ -36,6 +36,15 @@ def closure_blockers(workspace: Any) -> list[dict[str, Any]]:
                     "message": f"pull run {code} is {run.state.value}",
                 }
             )
+    for code, order in workspace.reorders.items():
+        if order.state in {RunState.QUEUED, RunState.RUNNING}:
+            blockers.append(
+                {
+                    "code": code,
+                    "kind": "reorder_order",
+                    "message": f"reorder order {code} is {order.state.value}",
+                }
+            )
     for code, track in workspace.tracks.items():
         if track.state == TrackState.MAINTENANCE and track.stack:
             blockers.append(

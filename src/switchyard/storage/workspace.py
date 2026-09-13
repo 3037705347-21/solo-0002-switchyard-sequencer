@@ -24,6 +24,7 @@ class YardWorkspace:
     intakes: dict[str, Any] = field(default_factory=dict)
     outbounds: dict[str, Any] = field(default_factory=dict)
     runs: dict[str, Any] = field(default_factory=dict)
+    reorders: dict[str, Any] = field(default_factory=dict)
     shifts: dict[str, Any] = field(default_factory=dict)
     events: list[YardEvent] = field(default_factory=list)
     closure_snapshots: list[dict[str, Any]] = field(default_factory=list)

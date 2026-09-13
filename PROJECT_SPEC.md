@@ -34,6 +34,8 @@ state as JSON files under a configurable data directory.
   sequence and an assembled sequence.
 - `PullRun`: a stateful sequence of buffer, pull, and return actions derived
   from a validated outbound plan.
+- `ReorderOrder`: a stateful track-tidying work order with buffer, extract,
+  and return actions that relocate standing cars without reserving them.
 - `ClosureSnapshot`: an immutable metric set and blocker list produced when a
   shift closes.
 
@@ -73,7 +75,25 @@ appended to the outbound assembled consist, and the run completes only when the
 assembled sequence matches the planned sequence. The dispatcher can then mark
 the train departed and move its cars into the departed state.
 
-### 4. Close a shift with a yard balance
+### 4. Reorganize standing tracks with a work order
+
+Entry: `POST /api/reorder-orders`, `POST /api/reorder-orders/{code}/advance`,
+`GET /api/reorder-orders/{code}`
+
+The dispatcher creates a reorder order either with explicit moves (target cars
+plus destination tracks) or with a target order for one track, which the
+planner restacks through a staging track. The planner simulates the LIFO
+stacks and the transfer bay, then derives buffer, extract, and return steps:
+blockers are parked in the bay, the target car is extracted to the bay, the
+target is returned to its destination track, and blockers are returned to
+their source track. Every moved car passes through the transfer bay, so the
+bay capacity limits how deep a car can sit. The crew advances the order one
+or more steps at a time; each executed step appends a persisted step record
+with the car's resulting location, so an interrupted order resumes from the
+work order itself. Reorder orders never create outbound trains and never
+reserve cars; every car stays standing for the whole order.
+
+### 5. Close a shift with a yard balance
 
 Entry: `POST /api/shifts/{code}/close`, `GET /api/yard`
 
@@ -93,6 +113,8 @@ view for verification.
 - Outbound state moves from `draft` to `planned` when a pull run is created,
   then to `ready` when assembly completes, then to `departed`.
 - Pull runs move from `queued` to `running`, then `completed` or `failed`.
+- Reorder orders move from `queued` to `running`, then `completed` or
+  `failed`, and block shift closure while active.
 - Car state moves from `received` to `standing`, `reserved`, `assembled`, and
   `departed`.
 - Destination-sorting tracks accept only cars whose destination matches the
@@ -103,6 +125,12 @@ view for verification.
 - Track spotting cannot exceed car count or total length capacity.
 - A pull plan is valid only when every buffer move targets a standing car that
   is not reserved elsewhere and the transfer bay has enough capacity.
+- A reorder plan follows the same rules: moved and blocking cars must be
+  standing and unreserved, the destination track must accept each car under
+  the destination, hazard, and capacity rules, and the transfer bay must hold
+  the blockers plus the extracted car.
+- Reorder execution verifies the track top, the bay top, the bay capacity, and
+  the receiving track before each step, exactly like pull run execution.
 - Closure is derived from the persisted workspace and never mutates car or
   track state.
 
@@ -131,6 +159,9 @@ workspace snapshot and never mutate it.
 - `POST /api/outbound-trains/{code}/sequencer`: create a pull run.
 - `POST /api/pull-runs/{code}/advance`: execute the next pull actions.
 - `POST /api/outbound-trains/{code}/depart`: mark an assembled train departed.
+- `POST /api/reorder-orders`: create and plan a track reorganization order.
+- `GET /api/reorder-orders/{code}`: return order steps and step records.
+- `POST /api/reorder-orders/{code}/advance`: execute the next reorder actions.
 - `POST /api/shifts/{code}/close`: create a closure snapshot.
 - `GET /api/yard`: return the full yard view.
 - `GET /api/shifts/{code}`: return shift details and recent events.

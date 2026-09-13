@@ -32,6 +32,7 @@ def yard_metrics(workspace: Any) -> dict[str, Any]:
                 "car_utilization": _percentage(count, track.capacity_cars),
                 "length_utilization": _percentage(length, track.capacity_length_m),
                 "top_car": track.top_code(),
+                "stack": list(track.stack),
             }
         )
     bay_metrics = [
@@ -50,6 +51,9 @@ def yard_metrics(workspace: Any) -> dict[str, Any]:
         if train.state.value not in {"DEPARTED", "ABANDONED"}
     ]
     active_runs = [code for code, run in workspace.runs.items() if run.state in {RunState.QUEUED, RunState.RUNNING}]
+    active_reorders = [
+        code for code, order in workspace.reorders.items() if order.state in {RunState.QUEUED, RunState.RUNNING}
+    ]
     open_shifts = [code for code, shift in workspace.shifts.items() if shift.state == ShiftState.OPEN]
     return {
         "total_cars": len(cars),
@@ -66,6 +70,7 @@ def yard_metrics(workspace: Any) -> dict[str, Any]:
         "active_intakes": sorted(active_intakes),
         "active_outbounds": sorted(active_outbounds),
         "active_runs": sorted(active_runs),
+        "active_reorder_orders": sorted(active_reorders),
         "open_shifts": sorted(open_shifts),
         "event_count": len(workspace.events),
         "version": workspace.version,

@@ -3,9 +3,10 @@
 Switchyard Sequencer is a runnable Python backend baseline for rail yard
 operations. It accepts inbound train manifests, classifies cars onto standing
 tracks under destination and hazard rules, plans an outbound pull sequence that
-respects LIFO stacks, executes buffer moves, and closes shifts with a
-deterministic yard balance. It uses only the Python standard library and local
-JSON files, so it runs without an external database or online service.
+respects LIFO stacks, executes buffer moves, tidies tracks through reorder
+work orders, and closes shifts with a deterministic yard balance. It uses only
+the Python standard library and local JSON files, so it runs without an
+external database or online service.
 
 ## Run the service
 
@@ -27,6 +28,7 @@ workflow checks exercise the real HTTP API:
 PYTHONPATH=src python3 checks/wf_intake_classify.py
 PYTHONPATH=src python3 checks/wf_outbound_sequence.py
 PYTHONPATH=src python3 checks/wf_pull_depart.py
+PYTHONPATH=src python3 checks/wf_reorder_order.py
 PYTHONPATH=src python3 checks/wf_close_shift.py
 ```
 
@@ -65,6 +67,9 @@ POST /api/outbound-trains
 POST /api/outbound-trains/OB-01/sequencer
 POST /api/pull-runs/RUN-01/advance
 POST /api/outbound-trains/OB-01/depart
+POST /api/reorder-orders
+POST /api/reorder-orders/RO-01/advance
+GET  /api/reorder-orders/RO-01
 POST /api/shifts/SHIFT-01/close
 GET  /api/yard
 ```

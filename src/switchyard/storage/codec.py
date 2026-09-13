@@ -8,6 +8,7 @@ from ..domain.car import FreightCar
 from ..domain.intake import IntakeTrain
 from ..domain.outbound import OutboundTrain
 from ..domain.pull import PullRun, YardEvent
+from ..domain.reorder import ReorderOrder
 from ..domain.shift import YardShift
 from ..domain.track import BufferBay, StandingTrack
 
@@ -23,6 +24,7 @@ def encode_workspace(workspace: Any) -> dict[str, Any]:
         "intakes": [train.to_dict() for train in workspace.intakes.values()],
         "outbounds": [train.to_dict() for train in workspace.outbounds.values()],
         "pull_runs": [run.to_dict() for run in workspace.runs.values()],
+        "reorder_orders": [order.to_dict() for order in workspace.reorders.values()],
         "shifts": [shift.to_dict() for shift in workspace.shifts.values()],
         "events": [event.to_dict() for event in workspace.events],
         "closure_snapshots": workspace.closure_snapshots,
@@ -38,6 +40,7 @@ def decode_workspace(raw: dict[str, Any]) -> Any:
     intakes = {str(item["code"]): IntakeTrain.from_dict(item) for item in raw.get("intakes", [])}
     outbounds = {str(item["code"]): OutboundTrain.from_dict(item) for item in raw.get("outbounds", [])}
     runs = {str(item["code"]): PullRun.from_dict(item) for item in raw.get("pull_runs", [])}
+    reorders = {str(item["code"]): ReorderOrder.from_dict(item) for item in raw.get("reorder_orders", [])}
     shifts = {str(item["code"]): YardShift.from_dict(item) for item in raw.get("shifts", [])}
     events = [YardEvent.from_dict(item) for item in raw.get("events", [])]
     workspace = YardWorkspace(
@@ -47,6 +50,7 @@ def decode_workspace(raw: dict[str, Any]) -> Any:
         intakes=intakes,
         outbounds=outbounds,
         runs=runs,
+        reorders=reorders,
         shifts=shifts,
         events=events,
     )

@@ -14,6 +14,7 @@ from .errors import StateTransitionError
 from .intake import IntakeTrain
 from .outbound import OutboundTrain
 from .pull import PullRun
+from .reorder import ReorderOrder
 from .shift import YardShift
 
 
@@ -77,6 +78,17 @@ def transition_run(run: PullRun, target: RunState, reason: str | None = None) ->
     run.state = target
 
 
+def transition_reorder(order: ReorderOrder, target: RunState, reason: str | None = None) -> None:
+    allowed = {
+        RunState.QUEUED.value: {RunState.RUNNING.value, RunState.FAILED.value},
+        RunState.RUNNING.value: {RunState.COMPLETED.value, RunState.FAILED.value},
+        RunState.COMPLETED.value: set(),
+        RunState.FAILED.value: set(),
+    }
+    _check(str(order.state), str(target), allowed, "reorder order", reason)
+    order.state = target
+
+
 def transition_shift(shift: YardShift, target: ShiftState, reason: str | None = None) -> None:
     allowed = {
         ShiftState.OPEN.value: {ShiftState.CLOSED.value},
@@ -90,6 +102,7 @@ __all__ = [
     "transition_car",
     "transition_intake",
     "transition_outbound",
+    "transition_reorder",
     "transition_run",
     "transition_shift",
 ]

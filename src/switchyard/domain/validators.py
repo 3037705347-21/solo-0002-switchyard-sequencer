@@ -6,15 +6,18 @@ import re
 from typing import Any
 
 from .car import CarInput, FreightCar
-from .enums import CarKind
+from .enums import CarKind, ReorderMode
 from .errors import ValidationError
 from .intake import IntakeTrain
 from .outbound import OutboundTrain
+from .reorder import ReorderRequest
 from .rules import (
     MAX_CAR_LENGTH_M,
     MAX_PLANNED_CARS,
+    MAX_REORDER_MOVES,
     MAX_TRAIN_CONSIST,
     MIN_CAR_LENGTH_M,
+    TRANSFER_BAY_CODE,
     destination_known,
     hazard_known,
     is_car_code,
@@ -190,9 +193,104 @@ def parse_transfer_code(raw: Any) -> str:
     return transfer
 
 
+def _car_code_list(raw: Any, field_name: str) -> list[str]:
+    if not isinstance(raw, list) or not raw:
+        raise ValidationError(f"{field_name} is required", **{field_name: ["must not be empty"]})
+    if len(raw) > MAX_REORDER_MOVES:
+        raise ValidationError(
+            "too many car codes",
+            **{field_name: [f"at most {MAX_REORDER_MOVES} entries"]},
+        )
+    codes: list[str] = []
+    for index, item in enumerate(raw):
+        if not isinstance(item, str) or not is_car_code(item):
+            raise ValidationError(
+                "invalid car code",
+                **{f"{field_name}[{index}]": ["expected format C-PREFIX-NUMBER"]},
+            )
+        value = item.strip().upper()
+        if value in codes:
+            raise ValidationError(
+                "duplicate car code",
+                **{f"{field_name}[{index}]": ["appears more than once"]},
+            )
+        codes.append(value)
+    return codes
+
+
+def build_reorder_payload(raw: Any) -> ReorderRequest:
+    body = require_object(raw, "payload")
+    code = require_text(body.get("code"), "code").upper()
+    if not is_entity_code(code, "RO"):
+        raise ValidationError("invalid reorder code", **{"code": ["expected prefix RO-"]})
+    mode_text = require_text(body.get("mode"), "mode").upper()
+    try:
+        mode = ReorderMode.parse(mode_text)
+    except ValueError as exc:
+        raise ValidationError("unknown reorder mode", **{"mode": ["MOVES or TARGET_ORDER"]}) from exc
+    transfer_raw = body.get("transfer_code")
+    if transfer_raw is None:
+        transfer_code = TRANSFER_BAY_CODE
+    else:
+        transfer_code = require_text(transfer_raw, "transfer_code").upper()
+        if not re.fullmatch(r"[A-Z][A-Z0-9]{0,8}", transfer_code):
+            raise ValidationError("invalid transfer code", **{"transfer_code": ["expected short bay code"]})
+    moves: list[tuple[str, str]] = []
+    track_code: str | None = None
+    target_order: list[str] = []
+    staging_track_code: str | None = None
+    if mode == ReorderMode.MOVES:
+        moves_raw = body.get("moves")
+        if not isinstance(moves_raw, list) or not moves_raw:
+            raise ValidationError("at least one move is required", **{"moves": ["must not be empty"]})
+        if len(moves_raw) > MAX_REORDER_MOVES:
+            raise ValidationError(
+                "too many moves",
+                **{"moves": [f"at most {MAX_REORDER_MOVES} moves per order"]},
+            )
+        for index, item in enumerate(moves_raw):
+            entry = require_object(item, f"moves[{index}]")
+            car_code = require_text(entry.get("car_code"), f"moves[{index}].car_code").upper()
+            if not is_car_code(car_code):
+                raise ValidationError(
+                    "invalid car code",
+                    **{f"moves[{index}].car_code": ["expected format C-PREFIX-NUMBER"]},
+                )
+            to_track = require_text(entry.get("to_track"), f"moves[{index}].to_track").upper()
+            if not is_entity_code(to_track):
+                raise ValidationError(
+                    "invalid track code",
+                    **{f"moves[{index}].to_track": ["expected a standing track code"]},
+                )
+            moves.append((car_code, to_track))
+    else:
+        track_code = require_text(body.get("track_code"), "track_code").upper()
+        if not is_entity_code(track_code):
+            raise ValidationError("invalid track code", **{"track_code": ["expected a standing track code"]})
+        target_order = _car_code_list(body.get("target_order"), "target_order")
+        staging_raw = body.get("staging_track_code")
+        if staging_raw is not None:
+            staging_track_code = require_text(staging_raw, "staging_track_code").upper()
+            if not is_entity_code(staging_track_code):
+                raise ValidationError(
+                    "invalid staging track code",
+                    **{"staging_track_code": ["expected a standing track code"]},
+                )
+    return ReorderRequest(
+        code=code,
+        mode=mode,
+        transfer_code=transfer_code,
+        moves=moves,
+        track_code=track_code,
+        target_order=target_order,
+        staging_track_code=staging_track_code,
+    )
+
+
 __all__ = [
     "build_intake_payload",
     "build_outbound_payload",
+    "build_reorder_payload",
     "build_shift_payload",
     "parse_advance_steps",
     "parse_car_input",
