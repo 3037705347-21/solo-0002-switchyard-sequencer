@@ -39,6 +39,7 @@ class Router:
         self.app = app
         self.routes = [
             Route("GET", r"/api/health", self._health),
+            Route("GET", r"/api/recovery", self._recovery),
             Route("GET", r"/api/yard", self._yard),
             Route("POST", r"/api/shifts", self._open_shift),
             Route("GET", r"/api/shifts/(?P<code>[^/]+)", self._shift_view),
@@ -56,12 +57,16 @@ class Router:
             args = route.match(method, path)
             if args is None:
                 continue
-            value = route.handler(body, **args)
+            with self.app.command_lock:
+                value = route.handler(body, **args)
             return 200, {"ok": True, "data": value}
         raise NotFoundError("route", f"{method} {path}")
 
     def _health(self, body: Any) -> dict[str, Any]:
         return {"service": "switchyard-sequencer", "status": "ready"}
+
+    def _recovery(self, body: Any) -> dict[str, Any]:
+        return {"recovery": self.app.recovery()}
 
     def _yard(self, body: Any) -> dict[str, Any]:
         return query_service.yard_view(self.app)

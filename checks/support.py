@@ -70,13 +70,29 @@ class ApiClient:
 
 
 class RunningServer:
-    def __init__(self, data_dir: Path | str | None = None):
+    def __init__(self, data_dir: Path | str | None = None, extra_env: dict[str, str] | None = None,
+                 keep_dir: bool = False):
         self.port = free_port()
         self.base_url = f"http://127.0.0.1:{self.port}"
-        self.temp_dir = tempfile.TemporaryDirectory(prefix="switchyard-check-")
-        data_dir = data_dir or Path(self.temp_dir.name) / "data"
+        self.keep_dir = keep_dir
+        if data_dir is not None:
+            self.data_dir = Path(data_dir)
+            self.data_dir.mkdir(parents=True, exist_ok=True)
+            self.temp_dir = None
+        else:
+            self.temp_dir = tempfile.TemporaryDirectory(prefix="switchyard-check-")
+            self.data_dir = Path(self.temp_dir.name) / "data"
         env = dict(os.environ)
         env["PYTHONPATH"] = str(SRC_DIR)
+        if extra_env:
+            env.update(extra_env)
+        self.extra_env = extra_env or {}
+        self.env = env
+        self.process: subprocess.Popen[str] | None = None
+        self.api = ApiClient(self.base_url)
+        self.start()
+
+    def start(self) -> None:
         self.process = subprocess.Popen(
             [
                 sys.executable,
@@ -87,25 +103,36 @@ class RunningServer:
                 "--port",
                 str(self.port),
                 "--data-dir",
-                str(data_dir),
+                str(self.data_dir),
             ],
             cwd=PROJECT_ROOT,
-            env=env,
+            env=self.env,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             text=True,
         )
+
+    def restart(self, extra_env: dict[str, str] | None = None) -> None:
+        if extra_env is not None:
+            self.extra_env = extra_env
+            env = dict(os.environ)
+            env["PYTHONPATH"] = str(SRC_DIR)
+            env.update(extra_env)
+            self.env = env
+        self.port = free_port()
+        self.base_url = f"http://127.0.0.1:{self.port}"
         self.api = ApiClient(self.base_url)
+        self.start()
 
     def wait_ready(self, timeout: float = 8.0) -> None:
         started = time.monotonic()
         last_error: Exception | None = None
         while time.monotonic() - started < timeout:
-            if self.process.poll() is not None:
+            if self.process is not None and self.process.poll() is not None:
                 output = ""
                 if self.process.stdout:
                     output = self.process.stdout.read()
-                raise AssertionError(f"server exited early:\n{output}")
+                raise AssertionError(f"server exited early (code {self.process.returncode}):\n{output}")
             try:
                 status, body = self.api.get("/api/health")
                 if status == 200 and body.get("ok"):
@@ -115,20 +142,28 @@ class RunningServer:
                 time.sleep(0.05)
         raise AssertionError(f"server did not become ready: {last_error}")
 
+    def wait_for_exit(self, timeout: float = 8.0) -> int:
+        assert self.process is not None
+        code = self.process.wait(timeout=timeout)
+        if self.process.stdout:
+            self._tail = self.process.stdout.read()
+        return code
+
     def stop(self) -> None:
-        if self.process.poll() is None:
+        if self.process is not None and self.process.poll() is None:
             self.process.terminate()
             try:
                 self.process.wait(timeout=5)
             except subprocess.TimeoutExpired:
                 self.process.kill()
                 self.process.wait(timeout=5)
-        if self.process.stdout:
+        if self.process is not None and self.process.stdout:
             self.process.stdout.close()
-        self.temp_dir.cleanup()
+        if self.temp_dir is not None:
+            self.temp_dir.cleanup()
 
     def output(self) -> str:
-        if self.process.stdout is None:
+        if self.process is None or self.process.stdout is None:
             return ""
         return self.process.stdout.read()
 

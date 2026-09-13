@@ -27,9 +27,21 @@ class YardWorkspace:
     shifts: dict[str, Any] = field(default_factory=dict)
     events: list[YardEvent] = field(default_factory=list)
     closure_snapshots: list[dict[str, Any]] = field(default_factory=list)
+    # Ordered commit ledger: one entry per successful business command.
+    # Each entry binds the resulting workspace version to the journal marker
+    # that records the same commit, so restart reconciliation can detect a
+    # state/journal gap, a duplicated journal write, or content drift.
+    commits: list[dict[str, Any]] = field(default_factory=list)
 
     def bump(self) -> None:
         self.version += 1
+
+    def last_commit(self) -> dict[str, Any] | None:
+        return self.commits[-1] if self.commits else None
+
+    def next_commit_number(self) -> int:
+        last = self.last_commit()
+        return int(last["commit_number"]) + 1 if last else 1
 
     def record_event(
         self,

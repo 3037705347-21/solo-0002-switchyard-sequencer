@@ -26,6 +26,7 @@ def encode_workspace(workspace: Any) -> dict[str, Any]:
         "shifts": [shift.to_dict() for shift in workspace.shifts.values()],
         "events": [event.to_dict() for event in workspace.events],
         "closure_snapshots": workspace.closure_snapshots,
+        "commits": list(workspace.commits),
     }
 
 
@@ -54,6 +55,7 @@ def decode_workspace(raw: dict[str, Any]) -> Any:
     workspace.version = int(raw.get("version", 1))
     workspace.next_event_sequence = int(raw.get("next_event_sequence", workspace.next_event_sequence))
     workspace.closure_snapshots = list(raw.get("closure_snapshots", []))
+    workspace.commits = [dict(item) for item in raw.get("commits", [])]
     return workspace
 
 
