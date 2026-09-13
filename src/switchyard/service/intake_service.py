@@ -62,7 +62,9 @@ def classify_intake_command(app: YardApplication, intake_code: str) -> dict[str,
     missing = [code for code in train.consist if code not in workspace.cars]
     if missing:
         raise ValidationError("consist references missing cars", **{"consist": missing})
-    spots = classify_intake(train, workspace.cars, workspace.tracks)
+    result = classify_intake(train, workspace.cars, workspace.tracks)
+    spots = result.spots
+    decisions = [item.to_dict() for item in result.decisions]
     if train.unplaced:
         message = f"intake {train.code} partially classified with {len(train.unplaced)} unplaced cars"
     else:
@@ -75,6 +77,7 @@ def classify_intake_command(app: YardApplication, intake_code: str) -> dict[str,
             "spotted": len(spots),
             "unplaced": list(train.unplaced),
             "spots": [item.to_dict() for item in spots],
+            "decisions": decisions,
         },
     )
     app.commit(workspace, event)
@@ -82,6 +85,7 @@ def classify_intake_command(app: YardApplication, intake_code: str) -> dict[str,
         "intake": train.to_dict(),
         "spots": [item.to_dict() for item in spots],
         "unplaced": list(train.unplaced),
+        "decisions": decisions,
     }
 
 

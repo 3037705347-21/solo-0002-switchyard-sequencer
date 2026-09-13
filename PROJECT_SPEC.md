@@ -51,6 +51,16 @@ and duplicate codes, then applies destination affinity, hazard rating, and
 capacity rules. A fully classified train is persisted and every placed car
 becomes available for outbound planning.
 
+The classify response also carries a per-car `decisions` trace next to the
+legacy `spots` and `unplaced` fields. A placed car lists its ranked candidate
+tracks with the remaining capacity each had at decision time, its final track
+and stack index, and the capacity left on the chosen track after placement. An
+unplaced car lists every evaluated track with its rejection reason in
+evaluation order. The trace describes only the current classification round:
+reclassifying a partial train reports cars already standing as skipped by
+state and never replays earlier placements. The same trace is journaled with
+the classification event.
+
 ### 2. Plan an outbound pull sequence
 
 Entry: `POST /api/outbound-trains`, `POST /api/outbound-trains/{code}/sequencer`
