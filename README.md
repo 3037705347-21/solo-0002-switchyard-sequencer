@@ -74,11 +74,13 @@ persisted data directory. The profile aggregates, per car:
   globally over the whole round of shunting events: completions identify a run
   through the exact consist, and plan/start/advance events must form a
   one-to-one, chronological, cursor-consistent sequence inside that run's
-  window. An event is bound only when it has the same owner in every
-  consistent assignment, so interleaved or out-of-order plans never borrow
-  another car's start/advance/completion/departure. When an owner is not unique
-  (or absent in older data) the event stays unattributed and is reported as an
-  `AMBIGUOUS_*` or `MISSING_*` evidence gap.
+  window. A multi-step ticket finished by a single advance call legitimately
+  has no advance events: its plan and start still bind uniquely and the run's
+  own completion times every step. An event is bound only when it has the same
+  owner in every consistent assignment, so interleaved or out-of-order plans
+  never borrow another car's start/advance/completion/departure. When an owner
+  is not unique (or absent in older data) the event stays unattributed and is
+  reported as an `AMBIGUOUS_*` or `MISSING_*` evidence gap.
 - Only car-relevant structured journal events are used; shift, closure, and
   yard-view messages are ignored, and event message text is never parsed.
 - Queries are read-only and deterministic: repeated calls return the same

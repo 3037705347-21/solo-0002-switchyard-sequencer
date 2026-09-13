@@ -381,18 +381,24 @@ class _JourneyContext:
             # Each event is visited exactly once, so assigning it never
             # conflicts with another event; a run legitimately owns many
             # events (one plan, one start, and several advances).
-            for run in compat:
-                if self._assignment_accepts(run, kind, event, owners_by_run[id(run)], bond, mapping):
-                    mapping[event.sequence] = run
-                    owners_by_run[id(run)].append(event)
-                    search(index + 1, mapping)
-                    owners_by_run[id(run)].pop()
-                    del mapping[event.sequence]
-                    if len(assignments) >= cap:
-                        return
-            # Advance events may legitimately stay unassigned (e.g. a run that
-            # finished in a single advance call); plan/start events cannot.
-            if kind == EventKind.PULL_RUN_ADVANCED:
+            feasible_runs = [
+                run
+                for run in compat
+                if self._assignment_accepts(run, kind, event, owners_by_run[id(run)], bond, mapping)
+            ]
+            for run in feasible_runs:
+                mapping[event.sequence] = run
+                owners_by_run[id(run)].append(event)
+                search(index + 1, mapping)
+                owners_by_run[id(run)].pop()
+                del mapping[event.sequence]
+                if len(assignments) >= cap:
+                    return
+            # An ADVANCED event physically belongs to some executed batch, so
+            # it must be assigned whenever at least one run can still accept
+            # it. It may stay unassigned only when no run can (orphan event or
+            # old data); plan/start events are always mandatory.
+            if kind == EventKind.PULL_RUN_ADVANCED and not feasible_runs:
                 search(index + 1, mapping)
 
         search(0, {})
@@ -433,8 +439,8 @@ class _JourneyContext:
                         return False
                     if cursors[-1] >= len(run.steps):
                         return cursors[-1] == len(run.steps)
-                elif len(run.steps) > 1:
-                    return False
+                # No owned advances is legal: a multi-step run finished in a
+                # single advance call is timed entirely by its own completion.
         return True
 
     def _assignment_accepts(
