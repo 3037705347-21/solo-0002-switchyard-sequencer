@@ -8,7 +8,7 @@ from ..domain.allocator import classify_intake
 from ..domain.car import CarInput, FreightCar
 from ..domain.enums import CarKind, CarState, EventKind, IntakeState
 from ..domain.errors import ConflictError, NotFoundError, ResourceBusyError, ValidationError
-from ..domain.validators import build_intake_payload
+from ..domain.validators import build_intake_payload, parse_manual_spots
 from .context import YardApplication
 
 
@@ -49,7 +49,7 @@ def create_intake(app: YardApplication, payload: Any) -> dict[str, Any]:
     }
 
 
-def classify_intake_command(app: YardApplication, intake_code: str) -> dict[str, Any]:
+def classify_intake_command(app: YardApplication, intake_code: str, payload: Any = None) -> dict[str, Any]:
     workspace = app.load()
     shift_code = _ensure_shift_open(workspace)
     train = workspace.intakes.get(intake_code)
@@ -62,7 +62,24 @@ def classify_intake_command(app: YardApplication, intake_code: str) -> dict[str,
     missing = [code for code in train.consist if code not in workspace.cars]
     if missing:
         raise ValidationError("consist references missing cars", **{"consist": missing})
-    spots = classify_intake(train, workspace.cars, workspace.tracks)
+    manual_requests = parse_manual_spots(payload if payload is not None else {})
+    consist = set(train.consist)
+    for index, (car_code, track_code) in enumerate(manual_requests):
+        if car_code not in consist:
+            raise ValidationError(
+                "manual placement references a car outside this intake",
+                **{f"manual_spots[{index}].car_code": ["not part of intake consist"]},
+            )
+        if track_code not in workspace.tracks:
+            raise ValidationError(
+                "manual placement references an unknown track",
+                **{f"manual_spots[{index}].track_code": ["no standing track with this code"]},
+            )
+    result = classify_intake(
+        train, workspace.cars, workspace.tracks, manual_spots=dict(manual_requests)
+    )
+    spots = result.spots
+    manual_outcomes = [item.to_dict() for item in result.manual_outcomes]
     if train.unplaced:
         message = f"intake {train.code} partially classified with {len(train.unplaced)} unplaced cars"
     else:
@@ -75,6 +92,7 @@ def classify_intake_command(app: YardApplication, intake_code: str) -> dict[str,
             "spotted": len(spots),
             "unplaced": list(train.unplaced),
             "spots": [item.to_dict() for item in spots],
+            "manual_spots": manual_outcomes,
         },
     )
     app.commit(workspace, event)
@@ -82,6 +100,7 @@ def classify_intake_command(app: YardApplication, intake_code: str) -> dict[str,
         "intake": train.to_dict(),
         "spots": [item.to_dict() for item in spots],
         "unplaced": list(train.unplaced),
+        "manual_spots": manual_outcomes,
     }
 
 

@@ -190,12 +190,55 @@ def parse_transfer_code(raw: Any) -> str:
     return transfer
 
 
+def parse_manual_spots(raw: Any) -> list[tuple[str, str]]:
+    """Optional dispatcher overrides pinning cars to specific standing tracks."""
+    body = require_object(raw, "payload")
+    manual_raw = body.get("manual_spots", [])
+    if manual_raw is None:
+        return []
+    if not isinstance(manual_raw, list):
+        raise ValidationError(
+            "manual_spots must be a list",
+            **{"manual_spots": ["expected a list of {car_code, track_code} objects"]},
+        )
+    if len(manual_raw) > MAX_TRAIN_CONSIST:
+        raise ValidationError(
+            "too many manual placements",
+            **{"manual_spots": [f"at most {MAX_TRAIN_CONSIST} manual placements"]},
+        )
+    requests: list[tuple[str, str]] = []
+    seen: set[str] = set()
+    for index, item in enumerate(manual_raw):
+        entry = require_object(item, f"manual_spots[{index}]")
+        car_code = require_text(entry.get("car_code"), f"manual_spots[{index}].car_code").upper()
+        if not is_car_code(car_code):
+            raise ValidationError(
+                "invalid car code",
+                **{f"manual_spots[{index}].car_code": ["expected format C-PREFIX-NUMBER"]},
+            )
+        track_code = require_text(entry.get("track_code"), f"manual_spots[{index}].track_code").upper()
+        if not re.fullmatch(r"[A-Z][A-Z0-9_-]{0,15}", track_code):
+            raise ValidationError(
+                "invalid track code",
+                **{f"manual_spots[{index}].track_code": ["expected an alphanumeric track code"]},
+            )
+        if car_code in seen:
+            raise ValidationError(
+                "duplicate manual placement for car",
+                **{f"manual_spots[{index}].car_code": ["appears more than once"]},
+            )
+        seen.add(car_code)
+        requests.append((car_code, track_code))
+    return requests
+
+
 __all__ = [
     "build_intake_payload",
     "build_outbound_payload",
     "build_shift_payload",
     "parse_advance_steps",
     "parse_car_input",
+    "parse_manual_spots",
     "parse_transfer_code",
     "require_integer",
     "require_object",

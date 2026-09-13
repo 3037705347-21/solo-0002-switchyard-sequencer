@@ -79,7 +79,7 @@ class Router:
         return intake_service.create_intake(self.app, body)
 
     def _classify(self, body: Any, code: str) -> dict[str, Any]:
-        return intake_service.classify_intake_command(self.app, code)
+        return intake_service.classify_intake_command(self.app, code, body)
 
     def _create_outbound(self, body: Any) -> dict[str, Any]:
         return outbound_service.create_outbound(self.app, body)

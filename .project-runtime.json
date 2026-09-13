@@ -12,6 +12,10 @@
       "command": "PYTHONPATH=src python3 checks/wf_intake_classify.py"
     },
     {
+      "workflow_id": "open-shift-classify-intake",
+      "command": "PYTHONPATH=src python3 checks/wf_intake_manual_spot.py"
+    },
+    {
       "workflow_id": "plan-outbound-pull",
       "command": "PYTHONPATH=src python3 checks/wf_outbound_sequence.py"
     },
