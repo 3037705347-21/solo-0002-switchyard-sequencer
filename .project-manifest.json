@@ -82,6 +82,21 @@
       "module_ids": ["entry", "service", "domain", "storage"]
     },
     {
+      "id": "reservation-ledger",
+      "name": "Inspect the reservation ledger and replan",
+      "entry": "GET /api/reservations and POST /api/outbound-trains/{code}/replan",
+      "steps": [
+        "freeze one reservation record per planned car at sequencing time",
+        "filter ledger entries by track, destination, status, car, or outbound",
+        "report both parties when a car is claimed by another plan",
+        "release reservations on replan or cancel while keeping history"
+      ],
+      "success": "the ledger mirrors active plans and car states, and released records stay traceable",
+      "failure": "conflicting claims name holder and requester; failed planning leaves no residue",
+      "verification": "workflow check covers planning success, planning failure, duplicate attempts, and replan release",
+      "module_ids": ["entry", "service", "domain", "storage"]
+    },
+    {
       "id": "close-shift-balance",
       "name": "Close a shift with a yard balance",
       "entry": "POST /api/shifts/{code}/close and GET /api/yard",

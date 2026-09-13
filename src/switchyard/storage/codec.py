@@ -8,6 +8,7 @@ from ..domain.car import FreightCar
 from ..domain.intake import IntakeTrain
 from ..domain.outbound import OutboundTrain
 from ..domain.pull import PullRun, YardEvent
+from ..domain.reservation import ReservationRecord
 from ..domain.shift import YardShift
 from ..domain.track import BufferBay, StandingTrack
 
@@ -17,6 +18,7 @@ def encode_workspace(workspace: Any) -> dict[str, Any]:
         "schema_version": workspace.schema_version,
         "version": workspace.version,
         "next_event_sequence": workspace.next_event_sequence,
+        "next_reservation_sequence": workspace.next_reservation_sequence,
         "tracks": [track.to_dict() for track in workspace.tracks.values()],
         "buffer_bays": [bay.to_dict() for bay in workspace.buffer_bays.values()],
         "cars": [car.to_dict() for car in workspace.cars.values()],
@@ -24,6 +26,7 @@ def encode_workspace(workspace: Any) -> dict[str, Any]:
         "outbounds": [train.to_dict() for train in workspace.outbounds.values()],
         "pull_runs": [run.to_dict() for run in workspace.runs.values()],
         "shifts": [shift.to_dict() for shift in workspace.shifts.values()],
+        "reservations": [record.to_dict() for record in workspace.reservations.values()],
         "events": [event.to_dict() for event in workspace.events],
         "closure_snapshots": workspace.closure_snapshots,
     }
@@ -39,6 +42,7 @@ def decode_workspace(raw: dict[str, Any]) -> Any:
     outbounds = {str(item["code"]): OutboundTrain.from_dict(item) for item in raw.get("outbounds", [])}
     runs = {str(item["code"]): PullRun.from_dict(item) for item in raw.get("pull_runs", [])}
     shifts = {str(item["code"]): YardShift.from_dict(item) for item in raw.get("shifts", [])}
+    reservations = {str(item["code"]): ReservationRecord.from_dict(item) for item in raw.get("reservations", [])}
     events = [YardEvent.from_dict(item) for item in raw.get("events", [])]
     workspace = YardWorkspace(
         tracks=tracks,
@@ -48,11 +52,15 @@ def decode_workspace(raw: dict[str, Any]) -> Any:
         outbounds=outbounds,
         runs=runs,
         shifts=shifts,
+        reservations=reservations,
         events=events,
     )
     workspace.schema_version = int(raw.get("schema_version", workspace.schema_version))
     workspace.version = int(raw.get("version", 1))
     workspace.next_event_sequence = int(raw.get("next_event_sequence", workspace.next_event_sequence))
+    workspace.next_reservation_sequence = int(
+        raw.get("next_reservation_sequence", workspace.next_reservation_sequence)
+    )
     workspace.closure_snapshots = list(raw.get("closure_snapshots", []))
     return workspace
 

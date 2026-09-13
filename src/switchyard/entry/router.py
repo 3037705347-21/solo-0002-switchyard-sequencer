@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 from typing import Any, Callable
+from urllib.parse import parse_qs, urlsplit
 
 from ..domain.errors import DomainError, NotFoundError
 from ..service import (
@@ -11,6 +12,7 @@ from ..service import (
     intake_service,
     outbound_service,
     query_service,
+    reservation_service,
     run_service,
     shift_service,
 )
@@ -47,51 +49,69 @@ class Router:
             Route("POST", r"/api/intake-trains/(?P<code>[^/]+)/classify", self._classify),
             Route("POST", r"/api/outbound-trains", self._create_outbound),
             Route("POST", r"/api/outbound-trains/(?P<code>[^/]+)/sequencer", self._sequence),
+            Route("POST", r"/api/outbound-trains/(?P<code>[^/]+)/replan", self._replan),
+            Route("POST", r"/api/outbound-trains/(?P<code>[^/]+)/cancel", self._cancel),
             Route("POST", r"/api/outbound-trains/(?P<code>[^/]+)/depart", self._depart),
             Route("POST", r"/api/pull-runs/(?P<code>[^/]+)/advance", self._advance),
+            Route("GET", r"/api/reservations", self._reservations),
+            Route("GET", r"/api/reservations/(?P<code>[^/]+)", self._reservation_view),
         ]
 
     def dispatch(self, method: str, path: str, body: Any) -> tuple[int, dict[str, Any]]:
+        parts = urlsplit(path)
+        query = {key: values[-1] for key, values in parse_qs(parts.query).items()}
         for route in self.routes:
-            args = route.match(method, path)
+            args = route.match(method, parts.path)
             if args is None:
                 continue
-            value = route.handler(body, **args)
+            value = route.handler(body, query, **args)
             return 200, {"ok": True, "data": value}
-        raise NotFoundError("route", f"{method} {path}")
+        raise NotFoundError("route", f"{method} {parts.path}")
 
-    def _health(self, body: Any) -> dict[str, Any]:
+    def _health(self, body: Any, query: dict[str, str]) -> dict[str, Any]:
         return {"service": "switchyard-sequencer", "status": "ready"}
 
-    def _yard(self, body: Any) -> dict[str, Any]:
+    def _yard(self, body: Any, query: dict[str, str]) -> dict[str, Any]:
         return query_service.yard_view(self.app)
 
-    def _open_shift(self, body: Any) -> dict[str, Any]:
+    def _open_shift(self, body: Any, query: dict[str, str]) -> dict[str, Any]:
         return shift_service.open_shift(self.app, body)
 
-    def _shift_view(self, body: Any, code: str) -> dict[str, Any]:
+    def _shift_view(self, body: Any, query: dict[str, str], code: str) -> dict[str, Any]:
         return shift_service.get_shift(self.app, code)
 
-    def _close_shift(self, body: Any, code: str) -> dict[str, Any]:
+    def _close_shift(self, body: Any, query: dict[str, str], code: str) -> dict[str, Any]:
         return closure_service.close_shift(self.app, code)
 
-    def _create_intake(self, body: Any) -> dict[str, Any]:
+    def _create_intake(self, body: Any, query: dict[str, str]) -> dict[str, Any]:
         return intake_service.create_intake(self.app, body)
 
-    def _classify(self, body: Any, code: str) -> dict[str, Any]:
+    def _classify(self, body: Any, query: dict[str, str], code: str) -> dict[str, Any]:
         return intake_service.classify_intake_command(self.app, code)
 
-    def _create_outbound(self, body: Any) -> dict[str, Any]:
+    def _create_outbound(self, body: Any, query: dict[str, str]) -> dict[str, Any]:
         return outbound_service.create_outbound(self.app, body)
 
-    def _sequence(self, body: Any, code: str) -> dict[str, Any]:
+    def _sequence(self, body: Any, query: dict[str, str], code: str) -> dict[str, Any]:
         return outbound_service.sequence_outbound(self.app, code, body)
 
-    def _depart(self, body: Any, code: str) -> dict[str, Any]:
+    def _replan(self, body: Any, query: dict[str, str], code: str) -> dict[str, Any]:
+        return outbound_service.replan_outbound(self.app, code)
+
+    def _cancel(self, body: Any, query: dict[str, str], code: str) -> dict[str, Any]:
+        return outbound_service.cancel_outbound(self.app, code)
+
+    def _depart(self, body: Any, query: dict[str, str], code: str) -> dict[str, Any]:
         return run_service.depart_outbound(self.app, code)
 
-    def _advance(self, body: Any, code: str) -> dict[str, Any]:
+    def _advance(self, body: Any, query: dict[str, str], code: str) -> dict[str, Any]:
         return run_service.advance_run(self.app, code, body)
+
+    def _reservations(self, body: Any, query: dict[str, str]) -> dict[str, Any]:
+        return reservation_service.reservation_ledger(self.app, query)
+
+    def _reservation_view(self, body: Any, query: dict[str, str], code: str) -> dict[str, Any]:
+        return reservation_service.reservation_view(self.app, code)
 
 
 __all__ = ["Route", "Router"]

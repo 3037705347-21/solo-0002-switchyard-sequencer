@@ -4,9 +4,10 @@ from __future__ import annotations
 
 from typing import Any
 
-from ..domain.enums import CarState, EventKind, OutboundState, RunState
+from ..domain.enums import CarState, EventKind, MoveVerb, OutboundState, ReservationStatus, RunState
 from ..domain.errors import ConflictError, NotFoundError, ResourceBusyError, ValidationError
 from ..domain.executor import execute_step
+from ..domain.reservation import active_for_outbound, fulfill_for_car
 from ..domain.timeutil import now_iso
 from ..domain.transitions import transition_car, transition_outbound, transition_run
 from ..domain.validators import parse_advance_steps
@@ -47,6 +48,8 @@ def advance_run(app: YardApplication, run_code: str, payload: Any) -> dict[str, 
     while executed < requested_steps and run.current_step < len(run.steps):
         step = run.steps[run.current_step]
         execute_step(workspace, run, step)
+        if step.verb == MoveVerb.PULL:
+            fulfill_for_car(workspace.reservations, run.outbound_code, step.car_code, "assembled", now_iso())
         run.current_step += 1
         executed += 1
     outbound = workspace.outbounds.get(run.outbound_code)
@@ -119,6 +122,10 @@ def depart_outbound(app: YardApplication, outbound_code: str) -> dict[str, Any]:
     outbound.departed_at = departed_at
     for code in outbound.assembled_car_codes:
         transition_car(workspace.cars[code], CarState.DEPARTED)
+    for record in active_for_outbound(workspace.reservations, outbound.code):
+        record.status = ReservationStatus.FULFILLED
+        record.released_at = departed_at
+        record.release_reason = "departed"
     event = workspace.record_event(
         shift_code,
         EventKind.TRAIN_DEPARTED,

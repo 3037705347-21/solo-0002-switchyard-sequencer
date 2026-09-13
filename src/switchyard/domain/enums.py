@@ -74,6 +74,12 @@ class RunState(EnumValue):
     FAILED = "FAILED"
 
 
+class ReservationStatus(EnumValue):
+    ACTIVE = "ACTIVE"
+    RELEASED = "RELEASED"
+    FULFILLED = "FULFILLED"
+
+
 class ShiftState(EnumValue):
     OPEN = "OPEN"
     CLOSED = "CLOSED"
@@ -91,6 +97,8 @@ class EventKind(EnumValue):
     TRAIN_CLASSIFIED = "TRAIN_CLASSIFIED"
     TRAIN_CREATED = "TRAIN_CREATED"
     PULL_PLANNED = "PULL_PLANNED"
+    RESERVATION_FROZEN = "RESERVATION_FROZEN"
+    RESERVATION_RELEASED = "RESERVATION_RELEASED"
     PULL_RUN_STARTED = "PULL_RUN_STARTED"
     PULL_RUN_ADVANCED = "PULL_RUN_ADVANCED"
     PULL_RUN_COMPLETED = "PULL_RUN_COMPLETED"
@@ -108,6 +116,7 @@ __all__ = [
     "IntakeState",
     "MoveVerb",
     "OutboundState",
+    "ReservationStatus",
     "RunState",
     "ShiftState",
     "TrackPurpose",

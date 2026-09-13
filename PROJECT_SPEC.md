@@ -34,6 +34,9 @@ state as JSON files under a configurable data directory.
   sequence and an assembled sequence.
 - `PullRun`: a stateful sequence of buffer, pull, and return actions derived
   from a validated outbound plan.
+- `ReservationRecord`: a ledger entry that freezes which outbound train claimed
+  a car, where the car stood, when the hold started, and which pull actions
+  depend on it; released and fulfilled records stay traceable.
 - `ClosureSnapshot`: an immutable metric set and blocker list produced when a
   shift closes.
 
@@ -73,7 +76,26 @@ appended to the outbound assembled consist, and the run completes only when the
 assembled sequence matches the planned sequence. The dispatcher can then mark
 the train departed and move its cars into the departed state.
 
-### 4. Close a shift with a yard balance
+### 4. Inspect the reservation ledger and replan
+
+Entry: `GET /api/reservations`, `GET /api/reservations/{code}`,
+`POST /api/outbound-trains/{code}/replan`,
+`POST /api/outbound-trains/{code}/cancel`
+
+Every successful sequencing freezes one reservation record per planned car. The
+record names the source outbound train, the planned destination, the standing
+track the car occupied at freeze time, the freeze timestamp, and the buffer,
+pull, and return actions that depend on the car. Duty officers filter the
+ledger by track, destination, status, car, or outbound train and see grouped
+views per car and per plan. When a car is already claimed, the planning attempt
+fails with a conflict list naming both the holding outbound train (with its
+reservation code and freeze time) and the requesting one. Replanning or
+cancelling a planned train releases its active reservations, returns the cars
+to standing, and discards the unstarted pull run; the released records remain
+in the ledger with their release reason so history stays traceable. Pulling a
+car onto the consist fulfills its reservation.
+
+### 5. Close a shift with a yard balance
 
 Entry: `POST /api/shifts/{code}/close`, `GET /api/yard`
 
@@ -95,6 +117,8 @@ view for verification.
 - Pull runs move from `queued` to `running`, then `completed` or `failed`.
 - Car state moves from `received` to `standing`, `reserved`, `assembled`, and
   `departed`.
+- Reservations move from `active` to `released` on replan or cancel, or to
+  `fulfilled` when the car is pulled; terminal records are never deleted.
 - Destination-sorting tracks accept only cars whose destination matches the
   track affinity.
 - Hazardous cars require a hazard-rated track.
@@ -129,6 +153,13 @@ workspace snapshot and never mutate it.
 - `POST /api/intake-trains/{code}/classify`: place cars on standing tracks.
 - `POST /api/outbound-trains`: create an outbound train.
 - `POST /api/outbound-trains/{code}/sequencer`: create a pull run.
+- `POST /api/outbound-trains/{code}/replan`: release reservations and return a
+  planned train to draft.
+- `POST /api/outbound-trains/{code}/cancel`: abandon a draft or planned train
+  and release its reservations.
+- `GET /api/reservations`: list ledger entries with `track`, `destination`,
+  `status`, `car`, and `outbound` filters plus per-car and per-plan groupings.
+- `GET /api/reservations/{code}`: return one ledger entry.
 - `POST /api/pull-runs/{code}/advance`: execute the next pull actions.
 - `POST /api/outbound-trains/{code}/depart`: mark an assembled train departed.
 - `POST /api/shifts/{code}/close`: create a closure snapshot.

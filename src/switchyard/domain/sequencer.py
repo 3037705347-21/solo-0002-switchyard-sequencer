@@ -22,6 +22,12 @@ class PlanningFailure:
     track_code: str | None = None
 
 
+@dataclass(slots=True)
+class PullPlan:
+    run: PullRun
+    actions_by_car: dict[str, list[MoveStep]] = field(default_factory=dict)
+
+
 def _fail(failure: PlanningFailure) -> None:
     raise ValidationError(failure.message, **{"sequencer": [failure.code]})
 
@@ -37,7 +43,7 @@ def plan_pull_run(
     tracks: dict[str, StandingTrack],
     transfer_bays: dict[str, BufferBay],
     transfer_code: str,
-) -> PullRun:
+) -> PullPlan:
     if outbound.state != OutboundState.DRAFT:
         raise StateTransitionError("outbound train", str(outbound.state), "PLANNED", "already has a plan")
     planned = list(outbound.planned_car_codes)
@@ -71,6 +77,7 @@ def plan_pull_run(
             _fail(_planning_failure("car-not-in-stack", f"car {code} is not in track {location}", code, location))
         source_of[code] = location
     steps: list[MoveStep] = []
+    actions_by_car: dict[str, list[MoveStep]] = {}
     max_blockers = 0
     for code in planned:
         source_code = source_of[code]
@@ -78,6 +85,7 @@ def plan_pull_run(
         bottom_index = stack.index(code)
         above = stack[bottom_index + 1 :]
         max_blockers = max(max_blockers, len(above))
+        car_steps: list[MoveStep] = []
         for blocker in reversed(above):
             blocker_car = cars.get(blocker)
             if blocker_car is None:
@@ -100,10 +108,12 @@ def plan_pull_run(
                         source_code,
                     )
                 )
-            steps.append(MoveStep(MoveVerb.BUFFER, blocker, source_code, transfer.code))
-        steps.append(MoveStep(MoveVerb.PULL, code, source_code, outbound.code))
+            car_steps.append(MoveStep(MoveVerb.BUFFER, blocker, source_code, transfer.code))
+        car_steps.append(MoveStep(MoveVerb.PULL, code, source_code, outbound.code))
         for blocker in above:
-            steps.append(MoveStep(MoveVerb.RETURN, blocker, transfer.code, source_code))
+            car_steps.append(MoveStep(MoveVerb.RETURN, blocker, transfer.code, source_code))
+        steps.extend(car_steps)
+        actions_by_car[code] = car_steps
         del stack[bottom_index]
     if max_blockers > transfer.capacity_cars:
         _fail(
@@ -118,7 +128,7 @@ def plan_pull_run(
         transition_car(cars[code], CarState.RESERVED)
     transition_outbound(outbound, OutboundState.PLANNED)
     outbound.run_codes.append(run.code)
-    return run
+    return PullPlan(run=run, actions_by_car=actions_by_car)
 
 
 def can_sequence(
@@ -146,4 +156,4 @@ def can_sequence(
     return failures
 
 
-__all__ = ["PlanningFailure", "can_sequence", "plan_pull_run"]
+__all__ = ["PlanningFailure", "PullPlan", "can_sequence", "plan_pull_run"]

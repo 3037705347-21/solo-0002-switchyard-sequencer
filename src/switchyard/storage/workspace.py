@@ -10,7 +10,7 @@ from ..domain.pull import YardEvent
 from ..domain.timeutil import now_iso
 from ..domain.track import BufferBay, StandingTrack
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 
 @dataclass(slots=True)
@@ -18,6 +18,7 @@ class YardWorkspace:
     schema_version: int = SCHEMA_VERSION
     version: int = 1
     next_event_sequence: int = 1
+    next_reservation_sequence: int = 1
     tracks: dict[str, StandingTrack] = field(default_factory=dict)
     buffer_bays: dict[str, BufferBay] = field(default_factory=dict)
     cars: dict[str, Any] = field(default_factory=dict)
@@ -25,11 +26,17 @@ class YardWorkspace:
     outbounds: dict[str, Any] = field(default_factory=dict)
     runs: dict[str, Any] = field(default_factory=dict)
     shifts: dict[str, Any] = field(default_factory=dict)
+    reservations: dict[str, Any] = field(default_factory=dict)
     events: list[YardEvent] = field(default_factory=list)
     closure_snapshots: list[dict[str, Any]] = field(default_factory=list)
 
     def bump(self) -> None:
         self.version += 1
+
+    def allocate_reservation_code(self) -> str:
+        code = f"RSV-{self.next_reservation_sequence:04d}"
+        self.next_reservation_sequence += 1
+        return code
 
     def record_event(
         self,
