@@ -190,12 +190,41 @@ def parse_transfer_code(raw: Any) -> str:
     return transfer
 
 
+def parse_replan_payload(raw: Any) -> tuple[str, list[str]]:
+    body = require_object(raw, "payload")
+    transfer_code = parse_transfer_code(body)
+    car_codes_raw = body.get("car_codes")
+    if not isinstance(car_codes_raw, list) or not car_codes_raw:
+        raise ValidationError("at least one planned car is required", **{"car_codes": ["must not be empty"]})
+    if len(car_codes_raw) > MAX_PLANNED_CARS:
+        raise ValidationError(
+            "too many planned cars",
+            **{"car_codes": [f"at most {MAX_PLANNED_CARS} cars"]},
+        )
+    codes: list[str] = []
+    for index, item in enumerate(car_codes_raw):
+        if not isinstance(item, str) or not is_car_code(item):
+            raise ValidationError(
+                "invalid car code",
+                **{f"car_codes[{index}]": ["expected format C-PREFIX-NUMBER"]},
+            )
+        value = item.strip().upper()
+        if value in codes:
+            raise ValidationError(
+                "duplicate planned car",
+                **{f"car_codes[{index}]": ["appears more than once"]},
+            )
+        codes.append(value)
+    return transfer_code, codes
+
+
 __all__ = [
     "build_intake_payload",
     "build_outbound_payload",
     "build_shift_payload",
     "parse_advance_steps",
     "parse_car_input",
+    "parse_replan_payload",
     "parse_transfer_code",
     "require_integer",
     "require_object",

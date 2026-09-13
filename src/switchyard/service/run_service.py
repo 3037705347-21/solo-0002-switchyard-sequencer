@@ -7,6 +7,7 @@ from typing import Any
 from ..domain.enums import CarState, EventKind, OutboundState, RunState
 from ..domain.errors import ConflictError, NotFoundError, ResourceBusyError, ValidationError
 from ..domain.executor import execute_step
+from ..domain.rules import is_car_code
 from ..domain.timeutil import now_iso
 from ..domain.transitions import transition_car, transition_outbound, transition_run
 from ..domain.validators import parse_advance_steps
@@ -132,4 +133,62 @@ def depart_outbound(app: YardApplication, outbound_code: str) -> dict[str, Any]:
     }
 
 
-__all__ = ["advance_run", "depart_outbound"]
+def remove_car(app: YardApplication, payload: Any) -> dict[str, Any]:
+    """Pull a car out of yard service (defect hold, rejected car).
+
+    This is the operational action that turns a still-unexecuted plan into a
+    real conflict: a reserved planned car can no longer be assembled. It only
+    touches the car record and its track/bay stack; manifests stay frozen.
+    """
+
+    body = payload if isinstance(payload, dict) else {}
+    raw_code = body.get("car_code")
+    if not isinstance(raw_code, str) or not is_car_code(raw_code):
+        raise ValidationError("invalid car code", **{"car_code": ["expected format C-PREFIX-NUMBER"]})
+    car_code = raw_code.strip().upper()
+    reason = str(body.get("reason") or "unspecified").strip()[:200]
+    workspace = app.load()
+    shift_code = _ensure_shift_open(workspace)
+    car = workspace.cars.get(car_code)
+    if car is None:
+        raise NotFoundError("car", car_code)
+    if car.state in {CarState.ASSEMBLED, CarState.DEPARTED}:
+        raise ResourceBusyError(
+            f"car {car_code} is {car.state.value} and cannot be removed",
+            car_code=car_code,
+        )
+    if car.state == CarState.REMOVED:
+        raise ConflictError("car is already removed", code=car_code)
+    # Detach the car from whatever stack currently holds it.
+    for track in workspace.tracks.values():
+        if car_code in track.stack:
+            track.stack.remove(car_code)
+    for bay in workspace.buffer_bays.values():
+        if car_code in bay.stack:
+            bay.stack.remove(car_code)
+    previous_location = car.location
+    transition_car(car, CarState.REMOVED)
+    car.location = "REMOVED"
+    car.note = (car.note + f" | removed: {reason}").strip(" |")[:200]
+    affected = [
+        code
+        for code, train in workspace.outbounds.items()
+        if car_code in train.planned_car_codes
+        and train.state in {OutboundState.PLANNED, OutboundState.READY}
+    ]
+    event = workspace.record_event(
+        shift_code,
+        EventKind.CAR_REMOVED,
+        f"car {car_code} removed from service: {reason}",
+        {
+            "car_code": car_code,
+            "previous_location": previous_location,
+            "reason": reason,
+            "affected_outbounds": affected,
+        },
+    )
+    app.commit(workspace, event)
+    return {"car": car.to_dict(), "affected_outbounds": affected}
+
+
+__all__ = ["advance_run", "depart_outbound", "remove_car"]

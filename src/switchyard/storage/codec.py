@@ -24,6 +24,7 @@ def encode_workspace(workspace: Any) -> dict[str, Any]:
         "outbounds": [train.to_dict() for train in workspace.outbounds.values()],
         "pull_runs": [run.to_dict() for run in workspace.runs.values()],
         "shifts": [shift.to_dict() for shift in workspace.shifts.values()],
+        "manifests": [document for document in workspace.manifests.values()],
         "events": [event.to_dict() for event in workspace.events],
         "closure_snapshots": workspace.closure_snapshots,
     }
@@ -40,6 +41,7 @@ def decode_workspace(raw: dict[str, Any]) -> Any:
     runs = {str(item["code"]): PullRun.from_dict(item) for item in raw.get("pull_runs", [])}
     shifts = {str(item["code"]): YardShift.from_dict(item) for item in raw.get("shifts", [])}
     events = [YardEvent.from_dict(item) for item in raw.get("events", [])]
+    manifests = {str(item["code"]): dict(item) for item in raw.get("manifests", [])}
     workspace = YardWorkspace(
         tracks=tracks,
         buffer_bays=bays,
@@ -49,6 +51,7 @@ def decode_workspace(raw: dict[str, Any]) -> Any:
         runs=runs,
         shifts=shifts,
         events=events,
+        manifests=manifests,
     )
     workspace.schema_version = int(raw.get("schema_version", workspace.schema_version))
     workspace.version = int(raw.get("version", 1))

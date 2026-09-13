@@ -3,8 +3,9 @@
 Switchyard Sequencer is a runnable Python backend baseline for rail yard
 operations. It accepts inbound train manifests, classifies cars onto standing
 tracks under destination and hazard rules, plans an outbound pull sequence that
-respects LIFO stacks, executes buffer moves, and closes shifts with a
-deterministic yard balance. It uses only the Python standard library and local
+respects LIFO stacks, executes buffer moves, freezes versioned departure
+manifests with content digests, and closes shifts with a deterministic yard
+balance. It uses only the Python standard library and local
 JSON files, so it runs without an external database or online service.
 
 ## Run the service
@@ -27,8 +28,15 @@ workflow checks exercise the real HTTP API:
 PYTHONPATH=src python3 checks/wf_intake_classify.py
 PYTHONPATH=src python3 checks/wf_outbound_sequence.py
 PYTHONPATH=src python3 checks/wf_pull_depart.py
+PYTHONPATH=src python3 checks/wf_departure_manifest.py
 PYTHONPATH=src python3 checks/wf_close_shift.py
 ```
+
+`wf_departure_manifest` publishes a manifest version after the plan is
+confirmed, then again mid-buffer, at assembly completion, and after a
+plan-vs-actual conflict is corrected. It asserts each version keeps its digest
+as the yard changes, that pending moves and conflicts are distinguished, and
+that every export verifies against the current yard.
 
 Each check starts an isolated server on a free port with a temporary data
 directory and stops the server before exiting.
@@ -36,7 +44,7 @@ directory and stops the server before exiting.
 ## Directory structure
 
 ```text
-src/switchyard/domain/    entities, validation, transitions, allocation, sequencing
+src/switchyard/domain/    entities, validation, transitions, allocation, sequencing, frozen manifests
 src/switchyard/storage/   workspace state, atomic JSON persistence, seed data
 src/switchyard/service/   workflow commands and application context
 src/switchyard/report/    metrics and closure summaries
@@ -63,6 +71,10 @@ POST /api/intake-trains
 POST /api/intake-trains/INT-01/classify
 POST /api/outbound-trains
 POST /api/outbound-trains/OB-01/sequencer
+POST /api/outbound-trains/OB-01/manifests
+GET  /api/outbound-trains/OB-01/readiness
+GET  /api/outbound-trains/OB-01/manifests/1
+GET  /api/outbound-trains/OB-01/manifests/1/export
 POST /api/pull-runs/RUN-01/advance
 POST /api/outbound-trains/OB-01/depart
 POST /api/shifts/SHIFT-01/close

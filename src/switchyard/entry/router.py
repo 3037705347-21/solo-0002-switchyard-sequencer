@@ -9,6 +9,7 @@ from ..domain.errors import DomainError, NotFoundError
 from ..service import (
     closure_service,
     intake_service,
+    manifest_service,
     outbound_service,
     query_service,
     run_service,
@@ -47,7 +48,27 @@ class Router:
             Route("POST", r"/api/intake-trains/(?P<code>[^/]+)/classify", self._classify),
             Route("POST", r"/api/outbound-trains", self._create_outbound),
             Route("POST", r"/api/outbound-trains/(?P<code>[^/]+)/sequencer", self._sequence),
+            Route("POST", r"/api/outbound-trains/(?P<code>[^/]+)/replan", self._replan),
             Route("POST", r"/api/outbound-trains/(?P<code>[^/]+)/depart", self._depart),
+            Route("POST", r"/api/outbound-trains/(?P<code>[^/]+)/manifests", self._publish_manifest),
+            Route("GET", r"/api/outbound-trains/(?P<code>[^/]+)/manifests", self._list_manifests),
+            Route(
+                "GET",
+                r"/api/outbound-trains/(?P<code>[^/]+)/manifests/(?P<version>[0-9]+)",
+                self._get_manifest,
+            ),
+            Route(
+                "GET",
+                r"/api/outbound-trains/(?P<code>[^/]+)/manifests/(?P<version>[0-9]+)/verify",
+                self._verify_manifest,
+            ),
+            Route(
+                "GET",
+                r"/api/outbound-trains/(?P<code>[^/]+)/manifests/(?P<version>[0-9]+)/export",
+                self._export_manifest,
+            ),
+            Route("GET", r"/api/outbound-trains/(?P<code>[^/]+)/readiness", self._readiness),
+            Route("POST", r"/api/cars/remove", self._remove_car),
             Route("POST", r"/api/pull-runs/(?P<code>[^/]+)/advance", self._advance),
         ]
 
@@ -87,8 +108,32 @@ class Router:
     def _sequence(self, body: Any, code: str) -> dict[str, Any]:
         return outbound_service.sequence_outbound(self.app, code, body)
 
+    def _replan(self, body: Any, code: str) -> dict[str, Any]:
+        return outbound_service.replan_outbound(self.app, code, body)
+
     def _depart(self, body: Any, code: str) -> dict[str, Any]:
         return run_service.depart_outbound(self.app, code)
+
+    def _publish_manifest(self, body: Any, code: str) -> dict[str, Any]:
+        return manifest_service.publish_manifest(self.app, code)
+
+    def _list_manifests(self, body: Any, code: str) -> dict[str, Any]:
+        return manifest_service.list_manifests(self.app, code)
+
+    def _get_manifest(self, body: Any, code: str, version: str) -> dict[str, Any]:
+        return manifest_service.get_manifest(self.app, code, int(version))
+
+    def _verify_manifest(self, body: Any, code: str, version: str) -> dict[str, Any]:
+        return manifest_service.verify_manifest_version(self.app, code, int(version))
+
+    def _export_manifest(self, body: Any, code: str, version: str) -> dict[str, Any]:
+        return manifest_service.export_manifest(self.app, code, int(version))
+
+    def _readiness(self, body: Any, code: str) -> dict[str, Any]:
+        return manifest_service.manifest_readiness(self.app, code)
+
+    def _remove_car(self, body: Any) -> dict[str, Any]:
+        return run_service.remove_car(self.app, body)
 
     def _advance(self, body: Any, code: str) -> dict[str, Any]:
         return run_service.advance_run(self.app, code, body)

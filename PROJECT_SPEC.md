@@ -34,6 +34,11 @@ state as JSON files under a configurable data directory.
   sequence and an assembled sequence.
 - `PullRun`: a stateful sequence of buffer, pull, and return actions derived
   from a validated outbound plan.
+- `DepartureManifest`: an immutable, versioned snapshot of one outbound train
+  taken when its plan is confirmed. It freezes the planned sequence, the
+  actual assembled sequence, basic car information, provenance (intake,
+  spotted track, shift, pull run), and a SHA-256 content digest. Old versions
+  are never rewritten.
 - `ClosureSnapshot`: an immutable metric set and blocker list produced when a
   shift closes.
 
@@ -73,6 +78,45 @@ appended to the outbound assembled consist, and the run completes only when the
 assembled sequence matches the planned sequence. The dispatcher can then mark
 the train departed and move its cars into the departed state.
 
+### 3a. Freeze and verify a departure manifest
+
+Entry: `POST /api/outbound-trains/{code}/manifests`,
+`GET /api/outbound-trains/{code}/manifests`,
+`GET /api/outbound-trains/{code}/manifests/{version}`,
+`GET /api/outbound-trains/{code}/manifests/{version}/verify`,
+`GET /api/outbound-trains/{code}/manifests/{version}/export`,
+`GET /api/outbound-trains/{code}/readiness`,
+`POST /api/cars/remove`,
+`POST /api/outbound-trains/{code}/replan`
+
+Once an outbound plan is confirmed (state `PLANNED` or `READY`), the driver
+publishes a departure manifest. The service freezes the planned sequence, the
+assembled sequence captured at that moment, each car's basic information, and a
+provenance trail (shift, intake train and route, spotted track, active pull run
+and transfer bay) into an immutable document. Each publication gets a
+per-train monotonically increasing version number and a SHA-256 digest over the
+canonical document content. Publishing never changes cars, tracks, runs, or the
+train state.
+
+When preparing for departure the readiness view compares the plan against the
+live assembly slot by slot and separates two kinds of difference:
+
+- `PENDING`: the plan has simply not been executed yet; the slot is empty and
+  the planned car is still reserved (possibly parked in the buffer). It will
+  resolve by continuing the pull run.
+- `CONFLICT`: the plan and the actual assembly can no longer converge as-is,
+  for example a planned car has been removed from service or an unplanned car
+  occupies a slot.
+
+A reserved car can be removed from service (defect hold) through
+`POST /api/cars/remove`; pending plans referencing it immediately show a
+conflict. A confirmed but not yet executed plan can be corrected with
+`POST /api/outbound-trains/{code}/replan`, which supersedes the queued run
+(failed with `error = "superseded by replan"`), releases old reservations, and
+derives a fresh run. Published manifests keep pointing at the run codes frozen
+at publication time and are never rewritten; verification reports whether each
+old version still matches the current yard.
+
 ### 4. Close a shift with a yard balance
 
 Entry: `POST /api/shifts/{code}/close`, `GET /api/yard`
@@ -103,6 +147,12 @@ view for verification.
 - Track spotting cannot exceed car count or total length capacity.
 - A pull plan is valid only when every buffer move targets a standing car that
   is not reserved elsewhere and the transfer bay has enough capacity.
+- Departure manifests are append-only: a published version is frozen with a
+  version number and content digest, and later state changes never modify it.
+- Manifest publication is derived from the persisted workspace and never
+  mutates car, track, run, or outbound train state.
+- Replanning is allowed only while the confirmed plan has no executed pull
+  step; the superseded queued run is failed and a new run is derived.
 - Closure is derived from the persisted workspace and never mutates car or
   track state.
 
@@ -110,9 +160,9 @@ view for verification.
 
 - `entry`: HTTP server, router, request parsing, and JSON envelopes.
 - `service`: application context and workflow commands that coordinate domain,
-  storage, and report modules.
+  storage, and report modules (including manifest publication and replanning).
 - `domain`: enums, entities, validation, state transitions, allocation rules,
-  pull sequencing, and domain errors.
+  pull sequencing, frozen departure manifest construction, and domain errors.
 - `storage`: workspace model, atomic persistence, seed tracks, and event
   journaling.
 - `report`: yard metrics, closure validation, and deterministic summaries.
@@ -129,6 +179,18 @@ workspace snapshot and never mutate it.
 - `POST /api/intake-trains/{code}/classify`: place cars on standing tracks.
 - `POST /api/outbound-trains`: create an outbound train.
 - `POST /api/outbound-trains/{code}/sequencer`: create a pull run.
+- `POST /api/outbound-trains/{code}/replan`: replace the confirmed consist and
+  derive a fresh pull run (only before any step executes).
+- `POST /api/outbound-trains/{code}/manifests`: publish a frozen manifest version.
+- `GET /api/outbound-trains/{code}/manifests`: list manifest versions.
+- `GET /api/outbound-trains/{code}/manifests/{version}`: fetch one frozen version.
+- `GET /api/outbound-trains/{code}/manifests/{version}/verify`: verify digest
+  and compare the frozen version against the current yard.
+- `GET /api/outbound-trains/{code}/manifests/{version}/export`: export the
+  canonical frozen document with live verification.
+- `GET /api/outbound-trains/{code}/readiness`: live plan-vs-actual differences
+  split into pending moves and conflicts.
+- `POST /api/cars/remove`: remove a car from service (defect/rejection hold).
 - `POST /api/pull-runs/{code}/advance`: execute the next pull actions.
 - `POST /api/outbound-trains/{code}/depart`: mark an assembled train departed.
 - `POST /api/shifts/{code}/close`: create a closure snapshot.
