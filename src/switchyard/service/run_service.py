@@ -11,7 +11,7 @@ from ..domain.pull import MoveStep
 from ..domain.sequencer import plan_pull_run
 from ..domain.timeutil import now_iso
 from ..domain.transitions import transition_car, transition_outbound, transition_run
-from ..domain.undo import release_run_reservation, rollback_run_attempt
+from ..domain.undo import rollback_attempt
 from ..domain.validators import parse_advance_steps, parse_transfer_code
 from .context import YardApplication
 
@@ -82,8 +82,13 @@ def advance_run(app: YardApplication, run_code: str, payload: Any) -> dict[str, 
     except DomainError as exc:
         failure = exc
     if failure is not None:
-        rollback_run_attempt(workspace, run, executed_steps, step_before)
-        run.current_step = step_before
+        # Roll back the entire attempt, including buffer/pull moves already
+        # committed by earlier advances, so the yard returns to its pre-attempt
+        # state and a retry can be planned with no manual repair.
+        applied_steps = list(run.steps[:step_before]) + executed_steps
+        rolled_back_count = len(applied_steps)
+        rollback_attempt(workspace, run, applied_steps)
+        run.current_step = 0
         transition_run(run, RunState.FAILED)
         run.failed_at = now_iso()
         run.error = failure.message
@@ -91,15 +96,17 @@ def advance_run(app: YardApplication, run_code: str, payload: Any) -> dict[str, 
             workspace.record_event(
                 shift_code,
                 EventKind.PULL_RUN_FAILED,
-                f"pull run {run_code} failed after {len(executed_steps)} step(s): {failure.message}",
+                f"pull run {run_code} failed; rolled back {rolled_back_count} applied step(s): {failure.message}",
                 {
                     "run_code": run_code,
                     "outbound_code": run.outbound_code,
                     "attempt": run.attempt,
+                    "committed_steps": _step_dicts(run.steps[:step_before]),
                     "executed_steps": _step_dicts(executed_steps),
-                    "buffer_count": sum(1 for step in executed_steps if str(step.verb) == "BUFFER"),
-                    "return_count": sum(1 for step in executed_steps if str(step.verb) == "RETURN"),
-                    "pull_count": sum(1 for step in executed_steps if str(step.verb) == "PULL"),
+                    "rolled_back_steps": _step_dicts(applied_steps),
+                    "buffer_count": sum(1 for step in applied_steps if str(step.verb) == "BUFFER"),
+                    "return_count": sum(1 for step in applied_steps if str(step.verb) == "RETURN"),
+                    "pull_count": sum(1 for step in applied_steps if str(step.verb) == "PULL"),
                     "failed_at": run.failed_at,
                     "error": failure.message,
                 },
@@ -182,10 +189,8 @@ def retry_run(app: YardApplication, outbound_code: str, payload: Any) -> dict[st
         raise ConflictError("pull run already exists", code=run_code)
     if transfer_code not in workspace.buffer_bays:
         raise ValidationError("unknown transfer bay", **{"transfer_code": ["not found"]})
-    # Only the first failed attempt leaves the outbound drafted; a failure
-    # after committed advances keeps the run reservation and partial
-    # assembly, which is released here before re-planning.
-    release_run_reservation(workspace, failed)
+    # The failed attempt was rolled back completely (buffered cars returned,
+    # reservation released, outbound back in draft), so re-plan directly.
     run = plan_pull_run(
         run_code,
         outbound,

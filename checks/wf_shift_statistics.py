@@ -295,63 +295,92 @@ def drive_failed_retry_shift(api: ApiClient, data_dir: Path) -> None:
         [
             _car("C-S3-N4-1", "N4"),
             _car("C-S3-N4-2", "N4"),
-            _car("C-S3-N4-3", "N4", kind="REEFER", length=20),
+            _car("C-S3-N4-3", "N4"),
+            _car("C-S3-N4-4", "N4"),
         ],
     )
     api.expect_ok("POST", "/api/intake-trains/INT-S31/classify", {})
+    # Stack bottom->top is N4-1, N4-2, N4-3, N4-4. Planning [N4-4, N4-2]
+    # derives: PULL N4-4, BUFFER N4-3, PULL N4-2, RETURN N4-3. The first two
+    # advances commit a pull and, crucially, a buffer before the later failure.
     api.expect_ok(
         "POST",
         "/api/outbound-trains",
-        {"code": "OB-S31", "destination": "N4", "car_codes": ["C-S3-N4-3", "C-S3-N4-1"]},
+        {"code": "OB-S31", "destination": "N4", "car_codes": ["C-S3-N4-4", "C-S3-N4-2"]},
     )
     sequenced = api.expect_ok("POST", "/api/outbound-trains/OB-S31/sequencer", {"transfer_code": "X1"})
     first_run = sequenced["pull_run"]["code"]
     first_steps = sequenced["pull_run"]["steps"]
+    verbs = [(step["verb"], step["car_code"]) for step in first_steps]
+    assert verbs == [
+        ("PULL", "C-S3-N4-4"),
+        ("BUFFER", "C-S3-N4-3"),
+        ("PULL", "C-S3-N4-2"),
+        ("RETURN", "C-S3-N4-3"),
+    ]
 
-    # First executed step pulls the stack-top target car; make the following
-    # BUFFER of the blocker impossible by pretending the blocker is reserved
-    # by another job.
-    assert first_steps[0]["verb"] == "PULL"
-    tamper_car_state(data_dir, "C-S3-N4-2", "RESERVED")
+    # Commit the pull and the buffer over two advances. After this the blocker
+    # C-S3-N4-3 is parked in the transfer bay and the first car is assembled.
+    first = api.expect_ok("POST", f"/api/pull-runs/{first_run}/advance", {"steps": 1})
+    assert first["completed"] is False
+    second = api.expect_ok("POST", f"/api/pull-runs/{first_run}/advance", {"steps": 1})
+    assert second["completed"] is False
+    bay_view = {bay["code"]: bay for bay in api.expect_ok("GET", "/api/yard")["metrics"]["transfer_bays"]}
+    assert bay_view["X1"]["cars"] == 1 and bay_view["X1"]["top_car"] == "C-S3-N4-3"
+
+    # Make the next PULL of C-S3-N4-2 impossible while a car is still buffered.
+    tamper_car_state(data_dir, "C-S3-N4-2", "REMOVED")
     failed = api.expect_error("POST", f"/api/pull-runs/{first_run}/advance", {"steps": 50})
     assert failed["code"] == "STATE_TRANSITION"
 
-    # The partially applied pull must have been rolled back completely.
-    # Global yard counts include earlier shifts, so verify the S3 cars
-    # through the shift-scoped statistics: no car reached assembly and the
-    # failed attempt left no net releases or reservations on the track.
+    # Full attempt recovery: the assembled car is returned to the track, the
+    # buffered blocker is given back, the bay is empty, and the yard state is
+    # back to the pre-attempt standing arrangement.
+    yard_after = api.expect_ok("GET", "/api/yard")["metrics"]
+    assert yard_after["car_state_counts"]["assembled"] == 0
+    bay_after = {bay["code"]: bay for bay in yard_after["transfer_bays"]}
+    assert bay_after["X1"]["cars"] == 0 and bay_after["X1"]["top_car"] is None
+    track = {item["code"]: item for item in yard_after["track_metrics"]}
+    assert track["N4-A"]["cars"] == 4 and track["N4-A"]["top_car"] == "C-S3-N4-4"
+
     run_view = api.expect_ok("GET", "/api/shifts/SHIFT-S3")
     assert any(event["kind"] == "PULL_RUN_FAILED" for event in run_view["events"])
-    yard = api.expect_ok("GET", "/api/yard")
-    assert yard["metrics"]["car_state_counts"]["assembled"] == 0
+    failed_payload = next(
+        event for event in run_view["events"] if event["kind"] == "PULL_RUN_FAILED"
+    )["payload"]
+    rolled = [(step["verb"], step["car_code"]) for step in failed_payload["rolled_back_steps"]]
+    assert rolled == [("PULL", "C-S3-N4-4"), ("BUFFER", "C-S3-N4-3")]
 
     failed_stats = strip_wrapper(stats(api, "SHIFT-S3"))
     assert failed_stats["retries"]["failed_runs"] == 1
     assert failed_stats["stages"]["pull_execution_s"]["failed"] == 1
     assert failed_stats["stages"]["pull_execution_s"]["average_s"] is None
     assert failed_stats["buffering"]["pull_moves"] == 0
-    assert failed_stats["buffering"]["moves_in_failed_attempts"]["pull"] == 1
+    assert failed_stats["buffering"]["buffer_moves"] == 0
+    assert failed_stats["buffering"]["moves_in_failed_attempts"] == {"buffer": 1, "return": 0, "pull": 1}
+    assert failed_stats["buffering"]["buffer_moves_in_failed_attempts"] == 1
     run_detail = {item["run_code"]: item for item in failed_stats["details"]["pull_runs"]}
     failed_run = run_detail[first_run]
     assert failed_run["state"] == "FAILED"
     assert failed_run["execution_s"] is None
     assert failed_run["moves"] == {"buffer": 0, "return": 0, "pull": 0}
-    assert failed_run["rolled_back_moves"]["pull"] == 1
+    assert failed_run["rolled_back_moves"] == {"buffer": 1, "return": 0, "pull": 1}
+    assert failed_run["rolled_back_move_count"] == 2
     assert failed_run["error"]
-    # failed attempt left no net track turnover
+    # the failed attempt left no net track turnover
     turnover = {item["track_code"]: item for item in failed_stats["track_turnover"]}
     assert turnover["N4-A"]["releases"] == 0
-    assert turnover["N4-A"]["placements"] == 3
-    # mid-failure is never zero-duration and never counted as a completed timing
+    assert turnover["N4-A"]["placements"] == 4
+    # no car timing is counted as completed from a rolled-back attempt
     car_stage = failed_stats["stages"]["car_to_assembly_s"]
-    assert car_stage["completed"] == 0
-    assert car_stage["average_s"] is None
+    assert car_stage["completed"] == 0 and car_stage["average_s"] is None
 
     # The failed run cannot be advanced again...
     again = api.expect_error("POST", f"/api/pull-runs/{first_run}/advance", {"steps": 1})
     assert again["code"] == "CONFLICT"
 
-    # ...restore the blocker and retry with a fresh attempt run.
+    # ...restore the target car and retry with a fresh attempt run. The retry
+    # re-buffers the blocker, returns it, and completes both planned pulls.
     tamper_car_state(data_dir, "C-S3-N4-2", "STANDING")
     retried = api.expect_ok("POST", "/api/outbound-trains/OB-S31/retry", {"transfer_code": "X1"})
     second_run = retried["pull_run"]["code"]
@@ -360,6 +389,8 @@ def drive_failed_retry_shift(api: ApiClient, data_dir: Path) -> None:
     assert retried["outbound"]["state"] == "PLANNED"
     advanced = api.expect_ok("POST", f"/api/pull-runs/{second_run}/advance", {"steps": 50})
     assert advanced["completed"] is True
+    bay_ok = {bay["code"]: bay for bay in api.expect_ok("GET", "/api/yard")["metrics"]["transfer_bays"]}
+    assert bay_ok["X1"]["cars"] == 0
     api.expect_ok("POST", "/api/outbound-trains/OB-S31/depart", {})
 
     recovered = strip_wrapper(stats(api, "SHIFT-S3"))
@@ -371,8 +402,11 @@ def drive_failed_retry_shift(api: ApiClient, data_dir: Path) -> None:
     }
     assert recovered["stages"]["pull_execution_s"]["completed"] == 1
     assert recovered["stages"]["pull_execution_s"]["failed"] == 1
+    # only the completed attempt counts effective yard work
+    assert recovered["buffering"]["buffer_moves"] == 1
+    assert recovered["buffering"]["return_moves"] == 1
     assert recovered["buffering"]["pull_moves"] == 2
-    assert recovered["buffering"]["moves_in_failed_attempts"]["pull"] == 1
+    assert recovered["buffering"]["moves_in_failed_attempts"] == {"buffer": 1, "return": 0, "pull": 1}
     outbound_detail = {item["outbound_code"]: item for item in recovered["details"]["outbounds"]}
     outbound = outbound_detail["OB-S31"]
     assert outbound["attempts"] == 2

@@ -178,10 +178,21 @@ def shift_statistics_from_events(events: list[Any], shift_code: str) -> dict[str
                 continue
             record = intakes.setdefault(code, {"code": code})
             record["received_at"] = event_at
+            # The manifest carries the train's physical arrival time, which is
+            # the reference for car waiting/departure dwell. The event time is
+            # only a fallback when the manifest timestamp is unusable.
             arrival_at = _parse_time(payload.get("arrival_at")) if isinstance(payload.get("arrival_at"), str) else None
             if arrival_at is None and ("arrival_at" in payload):
-                issues.append({"scope": "intake", "code": code, "reason": "unparseable arrival_at timestamp"})
+                issues.append(
+                    {
+                        "scope": "intake",
+                        "code": code,
+                        "reason": "unparseable arrival_at timestamp; falling back to receive event time",
+                    }
+                )
+            car_arrival_at = arrival_at or event_at
             record["arrival_at"] = arrival_at
+            record["car_arrival_at"] = car_arrival_at
             record["car_count"] = _payload_int(payload, "car_count")
             car_items = payload.get("cars")
             car_codes: list[str] = []
@@ -197,12 +208,24 @@ def shift_statistics_from_events(events: list[Any], shift_code: str) -> dict[str
                         "code": car_code,
                         "kind": str(item.get("kind") or "UNKNOWN") or "UNKNOWN",
                         "destination": str(item.get("destination") or "UNKNOWN") or "UNKNOWN",
-                        "arrived_at": event_at,
+                        "arrived_at": car_arrival_at,
+                        "actual_arrival_at": arrival_at,
+                        "received_event_at": event_at,
                     }
             else:
                 car_codes = _payload_car_codes(payload)
                 for car_code in car_codes:
-                    cars.setdefault(car_code, {"code": car_code, "kind": "UNKNOWN", "destination": "UNKNOWN", "arrived_at": event_at})
+                    cars.setdefault(
+                        car_code,
+                        {
+                            "code": car_code,
+                            "kind": "UNKNOWN",
+                            "destination": "UNKNOWN",
+                            "arrived_at": car_arrival_at,
+                            "actual_arrival_at": arrival_at,
+                            "received_event_at": event_at,
+                        },
+                    )
                 if not car_codes:
                     issues.append(
                         {"scope": "intake", "code": code, "reason": "received event lists no cars; detail degraded"}
@@ -297,14 +320,28 @@ def shift_statistics_from_events(events: list[Any], shift_code: str) -> dict[str
             if outbound_code is not None:
                 record["outbound_code"] = outbound_code
             record["attempt"] = attempt
-            steps = payload.get("executed_steps")
-            if isinstance(steps, list):
-                step_items = [item for item in steps if isinstance(item, dict)]
+            if kind == "PULL_RUN_FAILED":
+                # The failure payload lists every applied step that was rolled
+                # back, including buffer moves committed by earlier advances.
+                rolled = payload.get("rolled_back_steps")
+                if isinstance(rolled, list):
+                    rolled_items = [item for item in rolled if isinstance(item, dict)]
+                else:
+                    executed = payload.get("executed_steps")
+                    rolled_items = [item for item in executed if isinstance(item, dict)] if isinstance(executed, list) else []
+                record.setdefault("move_segments", []).append(
+                    {"terminal": kind, "steps": rolled_items, "at": event_at}
+                )
+                record["state"] = "FAILED"
+                failed_stamp = _parse_time(payload.get("failed_at"))
+                record["failed_at"] = failed_stamp or event_at
+                record["error"] = str(payload.get("error") or "execution failure")
             else:
-                step_items = []
-            record.setdefault("move_segments", []).append(
-                {"terminal": kind, "steps": step_items, "at": event_at}
-            )
+                steps = payload.get("executed_steps")
+                step_items = [item for item in steps if isinstance(item, dict)] if isinstance(steps, list) else []
+                record.setdefault("move_segments", []).append(
+                    {"terminal": kind, "steps": step_items, "at": event_at}
+                )
             if kind == "PULL_RUN_COMPLETED":
                 record["state"] = "COMPLETED"
                 record["completed_at"] = event_at
@@ -333,12 +370,7 @@ def shift_statistics_from_events(events: list[Any], shift_code: str) -> dict[str
                     if car is not None:
                         car["assembled_at"] = event_at
                         car["pulled_from_track"] = str(track_code) if isinstance(track_code, str) else None
-            elif kind == "PULL_RUN_FAILED":
-                record["state"] = "FAILED"
-                failed_stamp = _parse_time(payload.get("failed_at"))
-                record["failed_at"] = failed_stamp or event_at
-                record["error"] = str(payload.get("error") or "execution failure")
-            else:
+            elif kind == "PULL_RUN_ADVANCED":
                 record["state"] = "RUNNING"
 
         elif kind == "TRAIN_DEPARTED":
@@ -363,16 +395,20 @@ def shift_statistics_from_events(events: list[Any], shift_code: str) -> dict[str
     # ---- stage: intake handling (receive -> classify) -------------------
     intake_details: list[dict[str, Any]] = []
     intake_durations: list[int] = []
+    intake_wait_durations: list[int] = []
     intake_in_progress = 0
     intake_completed = 0
     for code in sorted(intakes):
         record = intakes[code]
         dwell = _elapsed(record.get("received_at"), record.get("classified_at"))
+        arrival_wait = _elapsed(record.get("car_arrival_at"), record.get("classified_at"))
         detail = {
             "intake_code": code,
+            "arrival_at": record.get("arrival_at"),
             "received_at": record.get("received_at"),
             "classified_at": record.get("classified_at"),
             "duration_s": dwell,
+            "arrival_to_classified_s": arrival_wait,
             "placed_count": record.get("placed_count"),
             "unplaced_count": record.get("unplaced_count"),
             "partial": record.get("partial", False),
@@ -394,6 +430,16 @@ def shift_statistics_from_events(events: list[Any], shift_code: str) -> dict[str
                 )
             else:
                 intake_durations.append(dwell)
+            if arrival_wait is None:
+                issues.append(
+                    {
+                        "scope": "intake",
+                        "code": code,
+                        "reason": "arrival-to-classified duration uncomputable; arrival timestamp missing",
+                    }
+                )
+            else:
+                intake_wait_durations.append(arrival_wait)
         intake_details.append(detail)
     intake_stage = _stage_block()
     intake_stage.update(_avg_max(intake_durations))
@@ -401,6 +447,12 @@ def shift_statistics_from_events(events: list[Any], shift_code: str) -> dict[str
     intake_stage["in_progress"] = intake_in_progress
     intake_stage["partial"] = sum(1 for item in intake_details if item["partial"])
     intake_stage["total"] = len(intake_details)
+
+    intake_wait_stage = _stage_block()
+    intake_wait_stage.update(_avg_max(intake_wait_durations))
+    intake_wait_stage["completed"] = len(intake_wait_durations)
+    intake_wait_stage["in_progress"] = intake_in_progress
+    intake_wait_stage["total"] = len(intake_details)
 
     # ---- stage: pull run planning delay and execution -------------------
     run_details: list[dict[str, Any]] = []
@@ -430,15 +482,15 @@ def shift_statistics_from_events(events: list[Any], shift_code: str) -> dict[str
         segments = record.get("move_segments", [])
         total = {"buffer": 0, "return": 0, "pull": 0}
         rolled_back = {"buffer": 0, "return": 0, "pull": 0}
-        # A COMPLETED event lists every run step, which overlaps the steps
-        # already reported by earlier ADVANCED segments: count the terminal
-        # COMPLETED event as authoritative and skip those fragments. Every
-        # move of a run that ultimately failed was undone (failure rollback
-        # or the reservation release before retry), so it is reported as
-        # rolled-back work instead of completed yard work.
-        reached_completed = any(segment["terminal"] == "PULL_RUN_COMPLETED" for segment in segments)
+        # The terminal event is authoritative: COMPLETED lists every run step
+        # and FAILED lists every applied step that was rolled back (including
+        # moves committed by earlier ADVANCED segments). Skip those subsumed
+        # ADVANCED fragments to avoid double counting.
+        has_terminal = any(
+            segment["terminal"] in {"PULL_RUN_COMPLETED", "PULL_RUN_FAILED"} for segment in segments
+        )
         for segment in segments:
-            if reached_completed and segment["terminal"] == "PULL_RUN_ADVANCED":
+            if has_terminal and segment["terminal"] == "PULL_RUN_ADVANCED":
                 continue
             counts = _move_counts(segment["steps"])
             target = rolled_back if state == "FAILED" else total
@@ -484,8 +536,10 @@ def shift_statistics_from_events(events: list[Any], shift_code: str) -> dict[str
     planning_stage["total"] = len(run_details)
 
     # ---- buffering and repeated attempts -------------------------------
-    # Moves inside a failed advance are rolled back: they are reported
-    # separately and never count as completed yard work.
+    # Moves of a failed attempt are all rolled back (FAILED lists every
+    # applied step, including ADVANCED ones committed earlier); moves of a
+    # completed run come from the terminal COMPLETED event. Both terminal
+    # events subsume earlier ADVANCED fragments, which are skipped.
     buffer_total = 0
     return_total = 0
     pull_total = 0
@@ -493,14 +547,14 @@ def shift_statistics_from_events(events: list[Any], shift_code: str) -> dict[str
     for record in runs.values():
         run_failed = record.get("state") == "FAILED"
         segments = record.get("move_segments", [])
-        reached_completed = any(segment["terminal"] == "PULL_RUN_COMPLETED" for segment in segments)
+        has_terminal = any(
+            segment["terminal"] in {"PULL_RUN_COMPLETED", "PULL_RUN_FAILED"} for segment in segments
+        )
         for segment in segments:
-            # Skip overlapping ADVANCED fragments when the terminal COMPLETED
-            # event lists every run step.
-            if reached_completed and segment["terminal"] == "PULL_RUN_ADVANCED":
+            if has_terminal and segment["terminal"] == "PULL_RUN_ADVANCED":
                 continue
             counts = _move_counts(segment["steps"])
-            if run_failed or segment["terminal"] == "PULL_RUN_FAILED":
+            if run_failed:
                 for key in failed_move_totals:
                     failed_move_totals[key] += counts[key]
             else:
@@ -536,20 +590,33 @@ def shift_statistics_from_events(events: list[Any], shift_code: str) -> dict[str
         )
 
     # ---- per-car arrival -> assembly/departure dwell -------------------
+    # Dwell starts at the manifest arrival time (actual physical arrival),
+    # not at the receive-event time.
     car_details: list[dict[str, Any]] = []
+    waiting_durations: list[int] = []
     assembly_durations: list[int] = []
     departure_durations: list[int] = []
+    cars_waiting = 0
     cars_assembled = 0
     cars_departed = 0
     for code in sorted(cars):
         record = cars[code]
         arrived_at = record.get("arrived_at")
+        actual_arrival_at = record.get("actual_arrival_at")
+        classified_at = record.get("classified_at")
         assembled_at = record.get("assembled_at")
         departed_at = record.get("departed_at")
+        waiting_s = _elapsed(arrived_at, classified_at)
         assembly_s = _elapsed(arrived_at, assembled_at)
         departure_s = _elapsed(arrived_at, departed_at)
         if arrived_at is None:
             issues.append({"scope": "car", "code": code, "reason": "car has no arrival timestamp"})
+        if classified_at is not None:
+            cars_waiting += 1
+            if waiting_s is None:
+                issues.append({"scope": "car", "code": code, "reason": "arrival-to-classified duration uncomputable"})
+            else:
+                waiting_durations.append(waiting_s)
         if assembled_at is not None:
             cars_assembled += 1
             if assembly_s is None:
@@ -567,15 +634,25 @@ def shift_statistics_from_events(events: list[Any], shift_code: str) -> dict[str
                 "car_code": code,
                 "kind": record.get("kind", "UNKNOWN"),
                 "destination": record.get("destination", "UNKNOWN"),
+                "arrival_at": actual_arrival_at,
+                "arrival_time_source": "manifest" if actual_arrival_at is not None else "receive_event",
+                "received_event_at": record.get("received_event_at"),
                 "arrived_at": arrived_at,
-                "classified_at": record.get("classified_at"),
+                "classified_at": classified_at,
                 "assembled_at": assembled_at,
                 "departed_at": departed_at,
                 "track_code": record.get("track_code"),
+                "waiting_s": waiting_s,
                 "assembly_s": assembly_s,
                 "departure_s": departure_s,
             }
         )
+
+    waiting_stage = _stage_block()
+    waiting_stage.update(_avg_max(waiting_durations))
+    waiting_stage["completed"] = cars_waiting
+    waiting_stage["in_progress"] = len(cars) - cars_waiting
+    waiting_stage["total"] = len(cars)
 
     assembly_stage = _stage_block()
     assembly_stage.update(_avg_max(assembly_durations))
@@ -630,6 +707,8 @@ def shift_statistics_from_events(events: list[Any], shift_code: str) -> dict[str
 
     stages = {
         "intake_handling_s": intake_stage,
+        "arrival_to_classified_s": intake_wait_stage,
+        "car_waiting_s": waiting_stage,
         "pull_planning_delay_s": planning_stage,
         "pull_execution_s": execution_stage,
         "car_to_assembly_s": assembly_stage,
