@@ -133,6 +133,14 @@ workspace snapshot and never mutate it.
 - `POST /api/outbound-trains/{code}/depart`: mark an assembled train departed.
 - `POST /api/shifts/{code}/close`: create a closure snapshot.
 - `GET /api/yard`: return the full yard view.
+- `GET /api/cars/{code}`: return the reconciled car location and ownership
+  view: current phase, claimed vs. physically observed location, owning
+  shift/intake/outbound ticket, related outbound and pull plans, last action,
+  recent state changes, and a cross-check against the yard overview. The
+  query is read-only; inconsistent state, location, or references are
+  reported as source-tagged alerts (`state`, `ref`, `run`, `intake`, `yard`)
+  rather than collapsed into a single field, and departed/removed cars are
+  never reported as still in the yard.
 - `GET /api/shifts/{code}`: return shift details and recent events.
 
 The service listens on a local port chosen through `--port` or the

@@ -40,6 +40,7 @@ class Router:
         self.routes = [
             Route("GET", r"/api/health", self._health),
             Route("GET", r"/api/yard", self._yard),
+            Route("GET", r"/api/cars/(?P<code>[^/]+)", self._car_view),
             Route("POST", r"/api/shifts", self._open_shift),
             Route("GET", r"/api/shifts/(?P<code>[^/]+)", self._shift_view),
             Route("POST", r"/api/shifts/(?P<code>[^/]+)/close", self._close_shift),
@@ -65,6 +66,9 @@ class Router:
 
     def _yard(self, body: Any) -> dict[str, Any]:
         return query_service.yard_view(self.app)
+
+    def _car_view(self, body: Any, code: str) -> dict[str, Any]:
+        return query_service.car_view_command(self.app, code)
 
     def _open_shift(self, body: Any) -> dict[str, Any]:
         return shift_service.open_shift(self.app, body)

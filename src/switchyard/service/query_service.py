@@ -4,8 +4,10 @@ from __future__ import annotations
 
 from typing import Any
 
-from ..domain.enums import EventKind
 from ..domain.errors import NotFoundError
+from ..domain.rules import is_car_code
+from ..domain.validators import require_text
+from ..report.car_view import build_car_view
 from ..report.summary import build_summary
 from .context import YardApplication
 
@@ -32,4 +34,20 @@ def shift_view(app: YardApplication, shift_code: str) -> dict[str, Any]:
     return {"shift": shift.to_dict(), "events": events[-50:]}
 
 
-__all__ = ["shift_view", "yard_view"]
+def car_view_command(app: YardApplication, raw_code: str) -> dict[str, Any]:
+    """Reconciled location and ownership answer for one car code.
+
+    Purely read-only: the workspace is loaded but never committed, so the
+    query cannot change car state.
+    """
+    code = require_text(raw_code, "code", 24).upper()
+    if not is_car_code(code):
+        raise NotFoundError("car", raw_code)
+    workspace = app.load()
+    view = build_car_view(workspace, code)
+    if not view.get("found"):
+        raise NotFoundError("car", raw_code)
+    return view
+
+
+__all__ = ["car_view_command", "shift_view", "yard_view"]

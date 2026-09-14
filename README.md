@@ -28,6 +28,8 @@ PYTHONPATH=src python3 checks/wf_intake_classify.py
 PYTHONPATH=src python3 checks/wf_outbound_sequence.py
 PYTHONPATH=src python3 checks/wf_pull_depart.py
 PYTHONPATH=src python3 checks/wf_close_shift.py
+PYTHONPATH=src python3 checks/wf_car_view.py
+PYTHONPATH=src python3 checks/wf_car_view_alerts.py
 ```
 
 Each check starts an isolated server on a free port with a temporary data
@@ -71,3 +73,22 @@ GET  /api/yard
 
 Request and response examples are embedded in the project specification and in
 the workflow checks.
+
+## Car location and ownership view
+
+Dispatchers who only know a car code can ask for one reconciled answer:
+
+```text
+GET /api/cars/{code}
+```
+
+The response joins the car's own state field with its physical presence in a
+standing-track stack, transfer bay, or train consist, plus the intake train,
+shift, outbound ticket, pull run, last action, and recent state changes. It is
+strictly read-only. When the sources disagree, every mismatch is listed in
+`consistency` with its source (`state`, `ref`, `run`, `intake`, or `yard`)
+instead of silently choosing one field. The `phase` is derived from physical
+evidence and is one of `IN_YARD`, `BUFFERED`, `RESERVED`, `ASSEMBLED`,
+`DEPARTED`, `REMOVED`, or `UNKNOWN`; `in_yard` is false for departed or
+removed cars, and `yard_overview` reconciles the car against the same counts
+returned by `GET /api/yard`.
