@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import Mapping
 
 from .car import FreightCar
 from .enums import CarState, IntakeState, TrackPurpose
-from .errors import ConflictError
+from .errors import ConflictError, ResourceBusyError
 from .intake import IntakeTrain
 from .rules import candidate_tracks_for, remaining_capacity_score
 from .track import StandingTrack
@@ -37,13 +38,36 @@ def _ranked_candidates(car: FreightCar, cars: dict[str, FreightCar], tracks: dic
     return destination + general
 
 
+def _raise_if_blocked_by_plan(
+    car_code: str,
+    ranked: list[StandingTrack],
+    pinned_tracks: Mapping[str, list[str]],
+) -> None:
+    blocked = [track for track in ranked if track.code in pinned_tracks]
+    if not blocked:
+        return
+    track_codes = [track.code for track in blocked]
+    run_codes = sorted({run_code for track in blocked for run_code in pinned_tracks[track.code]})
+    raise ResourceBusyError(
+        f"car {car_code} can only stand on {', '.join(track_codes)}, which "
+        f"{'is' if len(track_codes) == 1 else 'are'} pinned by active pull "
+        f"run(s) {', '.join(run_codes)}; finish the pull run before spotting "
+        "more cars there",
+        car_code=car_code,
+        track_codes=track_codes,
+        run_codes=run_codes,
+    )
+
+
 def classify_intake(
     train: IntakeTrain,
     cars: dict[str, FreightCar],
     tracks: dict[str, StandingTrack],
+    pinned_tracks: Mapping[str, list[str]] | None = None,
 ) -> list[SpotRecord]:
     if train.is_terminal():
         raise ConflictError(f"intake {train.code} is already terminal")
+    pinned = dict(pinned_tracks or {})
     spots: list[SpotRecord] = []
     unplaced: list[str] = []
     for code in train.consist:
@@ -55,10 +79,12 @@ def classify_intake(
             unplaced.append(code)
             continue
         ranked = _ranked_candidates(car, cars, tracks)
-        target = ranked[0] if ranked else None
-        if target is None:
+        available = [track for track in ranked if track.code not in pinned]
+        if not available:
+            _raise_if_blocked_by_plan(code, ranked, pinned)
             unplaced.append(code)
             continue
+        target = available[0]
         target.stack.append(car.code)
         car.state = CarState.STANDING
         car.location = target.code

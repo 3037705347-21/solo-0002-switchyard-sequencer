@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import Iterable
 
 from .car import FreightCar
-from .enums import CarState, MoveVerb, OutboundState
+from .enums import CarState, MoveVerb, OutboundState, RunState
 from .errors import StateTransitionError, ValidationError
 from .outbound import OutboundTrain
 from .pull import MoveStep, PullRun
@@ -146,4 +147,29 @@ def can_sequence(
     return failures
 
 
-__all__ = ["PlanningFailure", "can_sequence", "plan_pull_run"]
+def pinned_source_tracks(runs: Iterable[PullRun]) -> dict[str, list[str]]:
+    """Map standing tracks to the active pull runs that depend on their stacks.
+
+    A queued or running pull run derives its buffer, pull, and return steps
+    from the exact stack order of its source tracks. Spotting a new car on
+    top of such a track would silently invalidate the generated steps, so
+    classification must treat these tracks as pinned until the run finishes.
+    """
+    pinned: dict[str, list[str]] = {}
+    for run in runs:
+        if run.state not in {RunState.QUEUED, RunState.RUNNING}:
+            continue
+        for step in run.steps:
+            if step.verb in {MoveVerb.BUFFER, MoveVerb.PULL}:
+                track_code = step.source_code
+            elif step.verb == MoveVerb.RETURN:
+                track_code = step.target_code
+            else:
+                continue
+            run_codes = pinned.setdefault(track_code, [])
+            if run.code not in run_codes:
+                run_codes.append(run.code)
+    return pinned
+
+
+__all__ = ["PlanningFailure", "can_sequence", "pinned_source_tracks", "plan_pull_run"]

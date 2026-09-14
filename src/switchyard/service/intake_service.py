@@ -8,6 +8,7 @@ from ..domain.allocator import classify_intake
 from ..domain.car import CarInput, FreightCar
 from ..domain.enums import CarKind, CarState, EventKind, IntakeState
 from ..domain.errors import ConflictError, NotFoundError, ResourceBusyError, ValidationError
+from ..domain.sequencer import pinned_source_tracks
 from ..domain.validators import build_intake_payload
 from .context import YardApplication
 
@@ -62,7 +63,12 @@ def classify_intake_command(app: YardApplication, intake_code: str) -> dict[str,
     missing = [code for code in train.consist if code not in workspace.cars]
     if missing:
         raise ValidationError("consist references missing cars", **{"consist": missing})
-    spots = classify_intake(train, workspace.cars, workspace.tracks)
+    spots = classify_intake(
+        train,
+        workspace.cars,
+        workspace.tracks,
+        pinned_tracks=pinned_source_tracks(workspace.runs.values()),
+    )
     if train.unplaced:
         message = f"intake {train.code} partially classified with {len(train.unplaced)} unplaced cars"
     else:

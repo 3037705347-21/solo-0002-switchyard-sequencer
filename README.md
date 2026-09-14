@@ -28,6 +28,7 @@ PYTHONPATH=src python3 checks/wf_intake_classify.py
 PYTHONPATH=src python3 checks/wf_outbound_sequence.py
 PYTHONPATH=src python3 checks/wf_pull_depart.py
 PYTHONPATH=src python3 checks/wf_close_shift.py
+PYTHONPATH=src python3 checks/wf_plan_protection.py
 ```
 
 Each check starts an isolated server on a free port with a temporary data

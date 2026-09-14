@@ -103,6 +103,10 @@ view for verification.
 - Track spotting cannot exceed car count or total length capacity.
 - A pull plan is valid only when every buffer move targets a standing car that
   is not reserved elsewhere and the transfer bay has enough capacity.
+- A standing track referenced by a queued or running pull run is pinned:
+  classification cannot spot new cars on it until the run finishes. When a car
+  has no unpinned compatible track, classification fails with a clear busy
+  error instead of letting the queued plan break at execution time.
 - Closure is derived from the persisted workspace and never mutates car or
   track state.
 
