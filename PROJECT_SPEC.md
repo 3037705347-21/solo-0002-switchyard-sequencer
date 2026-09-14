@@ -109,7 +109,8 @@ view for verification.
   is not reserved elsewhere and the transfer bay has enough capacity.
 - Replacing a planned car is allowed only before its pull has executed; it must
   revalidate the old reservation release, new car location and destination,
-  LIFO feasibility, and live transfer-bay capacity.
+  LIFO feasibility, and live transfer-bay capacity. The replacement car cannot
+  already be selected by another DRAFT, PLANNED, or READY outbound train.
 - Closure is derived from the persisted workspace and never mutates car or
   track state.
 

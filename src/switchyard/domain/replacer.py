@@ -185,13 +185,22 @@ def replace_planned_car(
     if new_code in actual_bay:
         raise ResourceBusyError(f"new car {new_code} is currently buffered")
     for other_code, other in active_outbounds.items():
-        if other is outbound or other.state not in {OutboundState.PLANNED, OutboundState.READY}:
+        if other is outbound or other.state not in {
+            OutboundState.DRAFT,
+            OutboundState.PLANNED,
+            OutboundState.READY,
+        }:
             continue
         if new_code in other.planned_car_codes:
+            if other.state == OutboundState.DRAFT:
+                occupancy = "selected by draft outbound train"
+            else:
+                occupancy = "already reserved by outbound train"
             raise ResourceBusyError(
-                f"new car {new_code} is already reserved by outbound train {other_code}",
+                f"new car {new_code} is {occupancy} {other_code}",
                 car_code=new_code,
                 outbound_code=other_code,
+                outbound_state=other.state.value,
             )
 
     remaining = list(outbound.planned_car_codes[assembled_count:])

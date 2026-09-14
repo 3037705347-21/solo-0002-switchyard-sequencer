@@ -93,6 +93,29 @@ def run(api: ApiClient) -> None:
     # Rejections must not alter the plan or the old/new reservations.
     expect_replace_failed(api, "OB-C", "C-N4-CSEC", "C-E7-01")
     expect_replace_failed(api, "OB-C", "C-N4-CSEC", "C-N4-CAP")  # later planned C1 violates LIFO
+
+    # A car selected by another DRAFT ticket is occupied even though that draft
+    # has not reserved it yet. The rejected replacement must leave the draft able
+    # to sequence normally.
+    api.expect_ok(
+        "POST",
+        "/api/outbound-trains",
+        {"code": "OB-G", "destination": "N4", "car_codes": ["C-N4-QNEW"]},
+    )
+    draft_conflict = api.expect_error(
+        "POST",
+        "/api/outbound-trains/OB-C/replace-car",
+        {"old_car_code": "C-N4-CSEC", "new_car_code": "C-N4-QNEW"},
+    )
+    assert draft_conflict["code"] == "RESOURCE_BUSY"
+    assert draft_conflict["details"]["outbound_code"] == "OB-G"
+    assert draft_conflict["details"]["outbound_state"] == "DRAFT"
+    drafted = api.expect_ok("POST", "/api/outbound-trains/OB-G/sequencer", {"transfer_code": "X1"})
+    drafted_run = drafted["pull_run"]["code"]
+    drafted_advanced = api.expect_ok("POST", f"/api/pull-runs/{drafted_run}/advance", {"steps": 1})
+    assert drafted_advanced["completed"] is True
+    api.expect_ok("POST", "/api/outbound-trains/OB-G/depart", {})
+
     failed = api.expect_ok("GET", "/api/yard")
     assert failed["metrics"]["car_state_counts"]["reserved"] == 2
     failed_train = api.expect_ok("GET", "/api/shifts/SHIFT-04")
@@ -138,14 +161,14 @@ def run(api: ApiClient) -> None:
     assert buffered["completed"] is False
     assert buffered["pull_run"]["current_step"] == 4
     buffered_cars = [step["car_code"] for step in buffered["pull_run"]["steps"][:4]]
-    assert buffered_cars == ["C-N4-QNEW", "C-N4-QOLD", "C-N4-F12", "C-N4-F11"]
+    assert buffered_cars == ["C-N4-QOLD", "C-N4-F12", "C-N4-F11", "C-N4-B3"]
     yard = api.expect_ok("GET", "/api/yard")
     assert yard["metrics"]["transfer_bays"][0]["cars"] == 7
 
     # A failed replacement leaves the buffered ticket executable.
     expect_replace_failed(api, "OB-B", "C-N4-BOLD", "C-E7-01")
-    expect_replace_failed(api, "OB-B", "C-N4-BOLD", "C-N4-BX")  # already assembled
-    expect_replace_failed(api, "OB-B", "C-N4-BOLD", "C-N4-CAP")  # 8 blockers + 3 occupied slots
+    expect_replace_failed(api, "OB-B", "C-N4-BOLD", "C-N4-BX")  # already assembled on OB-C
+    expect_replace_failed(api, "OB-B", "C-N4-BOLD", "C-N4-CAP")  # 9 blockers + 3 occupied slots
     yard = api.expect_ok("GET", "/api/yard")
     assert yard["metrics"]["car_state_counts"]["reserved"] == 2
     assert yard["metrics"]["transfer_bays"][0]["cars"] == 7
@@ -178,7 +201,7 @@ def run(api: ApiClient) -> None:
     assert [step["verb"] for step in run_b["steps"][:4]] == ["BUFFER"] * 4
     assert run_b["steps"][4] == {
         "verb": "RETURN",
-        "car_code": "C-N4-F11",
+        "car_code": "C-N4-B3",
         "source_code": "X1",
         "target_code": "MIX-1",
     }
@@ -207,7 +230,8 @@ def run(api: ApiClient) -> None:
     counts = yard["metrics"]["car_state_counts"]
     assert counts["reserved"] == 0
     assert counts["assembled"] == 5
-    assert counts["standing"] == 19
+    assert counts["departed"] == 1
+    assert counts["standing"] == 18
     assert yard["metrics"]["transfer_bays"][0]["cars"] == 0
 
     shift = api.expect_ok("GET", "/api/shifts/SHIFT-04")
