@@ -40,10 +40,14 @@ Beyond the instant yard counters, each shift carries operation statistics that
 answer backlog, repeat-work, turnover, and dwell questions:
 
 - average and maximum duration for each stage — intake handling
-  (receive → classify), pull planning delay (planned → started), pull execution
-  (started → completed), car arrival → assembly, and car arrival → departure;
-- buffer, return, and pull move counts, with moves from a failed attempt
-  reported separately because they are rolled back;
+  (receive → classify), arrival → classified waiting (intake and per car),
+  pull planning delay (planned → started), pull execution (started →
+  completed), car arrival → assembly, and car arrival → departure. Waiting and
+  dwell stages start at the inbound train's manifest `arrival_at` (physical
+  arrival); when that timestamp is missing or malformed the receive-event
+  time is used and an entry is added to `issues`;
+- buffer, return, and pull move counts, with every move of a failed attempt
+  reported separately because it is rolled back;
 - failed runs, replanned retry runs, and how many outbounds needed a retry;
 - per-track placements, releases, turnovers, and cars still on the track;
 - destination distribution (received / classified / assembled / departed);
@@ -55,9 +59,16 @@ All statistics are recomputed solely from the shift-filtered event trail, so
 `GET /api/shifts/{code}/statistics/recompute` rebuilds them straight from the
 raw `events.jsonl` journal. Open shifts recompute live on every read; when a
 shift closes the numbers are frozen inside the closure snapshot and later reads
-serve that frozen document. Mid-run failures are persisted (`PULL_RUN_FAILED`),
-the partially applied moves are rolled back, and
-`POST /api/outbound-trains/{code}/retry` plans a fresh attempt run.
+serve that frozen document.
+
+When a pull action fails midway, the whole attempt is rolled back to its
+starting state — including pull and buffer moves already committed by earlier
+advances: buffered cars are returned to their source tracks, assembled cars go
+back onto the stack as reserved-then-standing, the transfer bay is emptied, and
+the outbound train returns to draft. The failure is persisted as
+`PULL_RUN_FAILED` with the full list of rolled-back steps, and
+`POST /api/outbound-trains/{code}/retry` plans a fresh numbered attempt run
+(`RUN-OB-…-R2`, `…-R3`, …) without any manual repair.
 
 ## Directory structure
 

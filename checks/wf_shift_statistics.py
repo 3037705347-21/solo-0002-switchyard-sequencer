@@ -6,11 +6,16 @@ Drives three shifts through the live HTTP API:
 * SHIFT-S2 stays partially open with an unclassified intake and a queued run;
   its statistics must move live while never treating the missing terminal
   timestamps as zero.
-* SHIFT-S3 injects a mid-run failure by corrupting the persisted yard state,
-  verifies rollback and PULL_RUN_FAILED accounting, then retries and departs.
+* SHIFT-S3 injects a mid-run failure only after a pull and a buffer move were
+  committed over separate advances, verifies the buffered car is returned,
+  every track and the transfer bay are restored, and PULL_RUN_FAILED
+  accounting, then retries and departs.
 
-Every statistic is recomputed directly from the raw JSONL journal and compared
-with the live numbers and, after closure, with the frozen closure snapshot.
+Pure event-level checks verify that car waiting/assembly/departure dwell is
+measured from the train's manifest arrival time (with a receive-event fallback
+for malformed timestamps). Every statistic is recomputed directly from the raw
+JSONL journal and compared with the live numbers and, after closure, with the
+frozen closure snapshot.
 """
 
 from __future__ import annotations
@@ -20,7 +25,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from support import PROJECT_ROOT, ApiClient, run_check
+from support import PROJECT_ROOT, ApiClient
 
 SRC_DIR = PROJECT_ROOT / "src"
 if str(SRC_DIR) not in sys.path:
@@ -30,6 +35,13 @@ from switchyard.report.shift_stats import shift_statistics_from_events  # noqa: 
 
 STATE_FILE = "yard-state.json"
 JOURNAL_FILE = "events.jsonl"
+
+# A deliberately old manifest arrival time. Waiting/dwell anchored to it must
+# exceed this many seconds (25 years), which proves the statistics use the
+# physical arrival time rather than the near-now receive-event time (which
+# would give a sub-second value).
+OLD_ARRIVAL = "2000-01-01T00:00:00Z"
+OLD_ARRIVAL_MIN_S = 25 * 365 * 24 * 3600
 
 
 def _car(code: str, destination: str, kind: str = "BOX", danger: str = "NONE", length: int = 18) -> dict[str, Any]:
@@ -93,7 +105,7 @@ def drive_complete_shift(api: ApiClient) -> str:
         api,
         "INT-S11",
         "RAIL-S11",
-        "2026-09-13T08:10:00Z",
+        OLD_ARRIVAL,
         [
             _car("C-S1-N4-1", "N4"),
             _car("C-S1-N4-2", "N4"),
@@ -111,6 +123,20 @@ def drive_complete_shift(api: ApiClient) -> str:
     assert intake_stage["completed"] == 1 and intake_stage["samples"] == 1
     assert isinstance(intake_stage["average_s"], (int, float))
     assert mid["stages"]["pull_execution_s"]["completed"] == 0
+    # Waiting is anchored to the old manifest arrival time, not the near-now
+    # receive event: every value must span decades rather than be near zero.
+    waiting_stage = mid["stages"]["car_waiting_s"]
+    assert waiting_stage["completed"] == 5
+    assert waiting_stage["average_s"] is not None
+    assert waiting_stage["average_s"] >= OLD_ARRIVAL_MIN_S
+    intake_detail = {item["intake_code"]: item for item in mid["details"]["intakes"]}
+    assert intake_detail["INT-S11"]["arrival_at"] == OLD_ARRIVAL
+    assert intake_detail["INT-S11"]["arrival_to_classified_s"] is not None
+    assert intake_detail["INT-S11"]["arrival_to_classified_s"] >= OLD_ARRIVAL_MIN_S
+    for car in mid["details"]["cars"]:
+        assert car["arrival_at"] == OLD_ARRIVAL
+        assert car["arrival_time_source"] == "manifest"
+        assert car["waiting_s"] is not None and car["waiting_s"] >= OLD_ARRIVAL_MIN_S
     assert mid["destination_distribution"] == [
         {"destination": "E7", "received": 1, "classified": 1, "assembled": 0, "departed": 0},
         {"destination": "N4", "received": 4, "classified": 4, "assembled": 0, "departed": 0},
@@ -184,6 +210,21 @@ def drive_complete_shift(api: ApiClient) -> str:
         {"destination": "E7", "received": 1, "classified": 1, "assembled": 0, "departed": 0},
         {"destination": "N4", "received": 4, "classified": 4, "assembled": 4, "departed": 4},
     ]
+    # Arrival -> assembly/departure dwell uses the old manifest arrival time
+    # for the four departed N4 cars; the not-yet-built E7 car stays in progress.
+    assert live["stages"]["car_to_assembly_s"]["samples"] == 4
+    assert live["stages"]["car_to_assembly_s"]["average_s"] is not None
+    assert live["stages"]["car_to_assembly_s"]["average_s"] >= OLD_ARRIVAL_MIN_S
+    assert live["stages"]["car_to_departure_s"]["samples"] == 4
+    assert live["stages"]["car_to_departure_s"]["average_s"] is not None
+    assert live["stages"]["car_to_departure_s"]["average_s"] >= OLD_ARRIVAL_MIN_S
+    departed_rows = [car for car in live["details"]["cars"] if car["departed_at"] is not None]
+    assert len(departed_rows) == 4
+    for car in departed_rows:
+        assert car["arrival_time_source"] == "manifest"
+        assert car["arrival_at"] == OLD_ARRIVAL
+        assert car["assembly_s"] is not None and car["assembly_s"] >= OLD_ARRIVAL_MIN_S
+        assert car["departure_s"] is not None and car["departure_s"] >= OLD_ARRIVAL_MIN_S
     assert live["issues"] == []
 
     closed = api.expect_ok("POST", "/api/shifts/SHIFT-S1/close", {})
@@ -414,8 +455,13 @@ def drive_failed_retry_shift(api: ApiClient, data_dir: Path) -> None:
     assert outbound["failed_attempts"] == 1
     assert outbound["departed"] is True
     turnover = {item["track_code"]: item for item in recovered["track_turnover"]}
-    assert turnover["N4-A"]["turnovers"] == 2
-    assert turnover["N4-A"]["cars_remaining"] == 1
+    assert turnover["N4-A"] == {
+        "track_code": "N4-A",
+        "placements": 4,
+        "releases": 2,
+        "turnovers": 2,
+        "cars_remaining": 2,
+    }
 
     closed = api.expect_ok("POST", "/api/shifts/SHIFT-S3/close", {})
     frozen = closed["snapshot"]["shift_statistics"]
@@ -480,7 +526,115 @@ def run(api: ApiClient, data_dir: Path | None = None) -> None:
     assert_stats_equal(strip_wrapper(s2_served), s2_final)
 
 
+def verify_arrival_timestamp_semantics() -> None:
+    """Event-level checks for actual arrival time handling.
+
+    A valid manifest arrival time anchors waiting/assembly/departure dwell;
+    a malformed arrival time falls back to the receive-event time and records
+    an issue instead of collapsing the duration to zero.
+    """
+    from switchyard.report.shift_stats import shift_statistics_from_events
+
+    def event(sequence: int, at: str | None, kind: str, payload: dict[str, Any]) -> dict[str, Any]:
+        return {"sequence": sequence, "at": at, "shift_code": "SHIFT-A", "kind": kind, "message": "", "payload": payload}
+
+    def car_pull_step(code: str) -> dict[str, Any]:
+        return {"verb": "PULL", "car_code": code, "source_code": "N4-A", "target_code": "OB-A"}
+
+    valid_events = [
+        event(1, "2026-09-13T12:00:00Z", "SHIFT_OPENED", {}),
+        event(
+            2,
+            "2026-09-13T12:05:00Z",
+            "TRAIN_RECEIVED",
+            {
+                "intake_code": "INT-A",
+                "arrival_at": "2026-09-13T08:00:00Z",
+                "car_count": 1,
+                "cars": [{"code": "C-A-01", "kind": "BOX", "destination": "N4"}],
+            },
+        ),
+        event(
+            3,
+            "2026-09-13T12:10:00Z",
+            "TRAIN_CLASSIFIED",
+            {"intake_code": "INT-A", "unplaced": [], "spots": [{"car_code": "C-A-01", "track_code": "N4-A"}]},
+        ),
+        event(
+            4,
+            "2026-09-13T12:20:00Z",
+            "TRAIN_CREATED",
+            {"outbound_code": "OB-A", "destination": "N4", "car_codes": ["C-A-01"], "planned_count": 1},
+        ),
+        event(
+            5,
+            "2026-09-13T12:21:00Z",
+            "PULL_PLANNED",
+            {"run_code": "RUN-OB-A", "outbound_code": "OB-A", "attempt": 1, "steps": 1},
+        ),
+        event(6, "2026-09-13T12:22:00Z", "PULL_RUN_STARTED", {"run_code": "RUN-OB-A", "outbound_code": "OB-A", "attempt": 1}),
+        event(
+            7,
+            "2026-09-13T12:30:00Z",
+            "PULL_RUN_COMPLETED",
+            {
+                "run_code": "RUN-OB-A",
+                "outbound_code": "OB-A",
+                "attempt": 1,
+                "assembled_car_codes": ["C-A-01"],
+                "executed_steps": [car_pull_step("C-A-01")],
+                "started_at": "2026-09-13T12:22:00Z",
+                "completed_at": "2026-09-13T12:30:00Z",
+            },
+        ),
+        event(
+            8,
+            "2026-09-13T12:40:00Z",
+            "TRAIN_DEPARTED",
+            {"outbound_code": "OB-A", "destination": "N4", "car_codes": ["C-A-01"], "departed_at": "2026-09-13T12:40:00Z"},
+        ),
+    ]
+    result = shift_statistics_from_events(valid_events, "SHIFT-A")
+    car = result["details"]["cars"][0]
+    assert car["arrival_at"] == "2026-09-13T08:00:00Z"
+    assert car["arrival_time_source"] == "manifest"
+    # 08:00 -> 12:10 classified (waiting), -> 12:30 assembled, -> 12:40 departed
+    assert car["waiting_s"] == 4 * 3600 + 10 * 60
+    assert car["assembly_s"] == 4 * 3600 + 30 * 60
+    assert car["departure_s"] == 4 * 3600 + 40 * 60
+    assert result["stages"]["car_waiting_s"]["average_s"] == car["waiting_s"]
+    intake = result["details"]["intakes"][0]
+    assert intake["arrival_to_classified_s"] == car["waiting_s"]
+    assert intake["duration_s"] == 5 * 60  # receive event 12:05 -> classified 12:10
+
+    # Malformed manifest arrival falls back to the receive-event time (12:05).
+    malformed = [
+        {
+            "sequence": item["sequence"],
+            "at": item["at"],
+            "shift_code": "SHIFT-A",
+            "kind": item["kind"],
+            "message": "",
+            "payload": dict(item["payload"]),
+        }
+        for item in valid_events
+    ]
+    malformed[1]["payload"]["arrival_at"] = "not-a-timestamp"
+    fallback = shift_statistics_from_events(malformed, "SHIFT-A")
+    fallback_car = fallback["details"]["cars"][0]
+    assert fallback_car["arrival_at"] is None
+    assert fallback_car["arrival_time_source"] == "receive_event"
+    # Waiting becomes receive-event (12:05) -> classify (12:10), not zero.
+    assert fallback_car["waiting_s"] == 5 * 60
+    assert fallback_car["assembly_s"] == 25 * 60
+    reasons = " ".join(issue["reason"] for issue in fallback["issues"])
+    assert "arrival_at" in reasons
+
+
 def main() -> int:
+    # Pure event-level checks for actual arrival time semantics run first.
+    verify_arrival_timestamp_semantics()
+
     # run_check does not expose the data directory, so drive the server here
     # when invoked directly so failure injection can target the state file.
     from support import RunningServer

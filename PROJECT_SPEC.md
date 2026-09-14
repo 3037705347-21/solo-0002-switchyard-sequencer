@@ -71,11 +71,15 @@ the current track top, the buffer state, and the car reservation before
 changing locations. Buffer cars are parked and later returned, planned cars are
 appended to the outbound assembled consist, and the run completes only when the
 assembled sequence matches the planned sequence. If an action fails midway,
-the already-applied actions of that advance are rolled back, the run is
-persisted as `failed` with a `PULL_RUN_FAILED` event (no partial work and no
-zero-duration completion are recorded), and the dispatcher can plan a fresh
-attempt run through the retry command. The dispatcher can then mark the train
-departed and move its cars into the departed state.
+the entire attempt is rolled back to its starting state, even when earlier
+advances already committed pull or buffer moves: buffered cars are returned to
+their source tracks, assembled cars go back onto the stack, the transfer bay is
+emptied, planned cars return to standing, and the outbound train returns to
+draft. The run is persisted as `failed` with a `PULL_RUN_FAILED` event listing
+every rolled-back step (no partial work and no zero-duration completion are
+recorded), and the dispatcher can plan a fresh numbered attempt run through the
+retry command without any manual repair. The dispatcher can then mark the
+train departed and move its cars into the departed state.
 
 ### 4. Close a shift with a yard balance
 
@@ -94,17 +98,21 @@ Entry: `GET /api/shifts/{code}/statistics`,
 `GET /api/shifts/{code}/statistics/recompute`
 
 The shift lead reviews per-shift statistics rebuilt from the event trail:
-average and maximum intake handling, pull planning delay, pull execution, and
-arrival-to-assembly / arrival-to-departure durations; buffer, return, and pull
-move counts (with rolled-back moves from failed attempts reported separately);
-failed runs, retries, and outbounds that needed more than one attempt; track
-placements, releases, and turnovers; destination distribution; and per-intake,
-per-run, per-outbound, and per-car detail rows. Statistics for an open shift
-are recomputed live on every read; when the shift closes the same document is
-frozen inside the closure snapshot. Missing or unparseable timestamps keep a
-timing value empty and add an entry to `issues` rather than counting as zero,
-in-progress work is excluded from averages and maxima, and events are always
-filtered by shift code so closed shifts never bleed into the current shift.
+average and maximum intake handling, arrival-to-classified waiting, pull
+planning delay, pull execution, and arrival-to-assembly / arrival-to-departure
+durations; buffer, return, and pull move counts (with every move of a failed
+attempt reported separately as rolled-back work); failed runs, retries, and
+outbounds that needed more than one attempt; track placements, releases, and
+turnovers; destination distribution; and per-intake, per-run, per-outbound, and
+per-car detail rows. Waiting and dwell stages start at the inbound train's
+manifest arrival time (`arrival_at`); when that value is missing or malformed
+the receive-event time is used and an entry is added to `issues`. Statistics
+for an open shift are recomputed live on every read; when the shift closes the
+same document is frozen inside the closure snapshot. Missing or unparseable
+timestamps keep a timing value empty and add an entry to `issues` rather than
+counting as zero, in-progress work is excluded from averages and maxima, and
+events are always filtered by shift code so closed shifts never bleed into the
+current shift.
 
 ## State and rules
 
